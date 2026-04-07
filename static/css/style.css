@@ -168,7 +168,7 @@ body {
   background: #e2e8f0;
 }
 
-.log-scroll { max-height: 320px; overflow-y: auto; }
+.log-scroll { max-height: 460px; min-height: 460px; overflow-y: auto; }
 .operator-filter { min-width: 180px; }
 .uniform-btn { min-width: 96px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; }
 .monitor-actions .uniform-btn { flex: 1 1 calc(25% - 0.5rem); min-width: 120px; }
@@ -224,6 +224,18 @@ body {
   max-height: 520px;
   overflow-y: auto;
   border-radius: 10px;
+}
+.history-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #fff;
+}
+
+.admin-scroll-list {
+  max-height: 460px;
+  min-height: 460px;
+  overflow-y: auto;
 }
 
 @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(8px);} to { opacity: 1; transform: translateY(0);} }

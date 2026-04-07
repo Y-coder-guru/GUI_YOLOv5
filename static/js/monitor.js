@@ -18,6 +18,15 @@ let durationTimer = null;
 let durationBaseSeconds = 0;
 let durationBaseAt = Date.now();
 let durationCameraOn = false;
+let configSyncPausedUntil = 0;
+
+function isConfigEditing() {
+  const ids = [
+    'cfgResolution', 'cfgFps', 'cfgExposure', 'cfgGain', 'cfgBaudrate', 'cfgTimeout',
+    'cfgAwb', 'cfgFlipH', 'cfgFlipV', 'cameraType',
+  ];
+  return ids.some((id) => document.activeElement === document.getElementById(id));
+}
 
 async function postApi(url, payload) {
   const res = await fetch(url, {
@@ -104,7 +113,8 @@ async function refreshSystem() {
   if (!data.ok) return;
 
   const remoteType = data.camera_type || 'local';
-  if (data.camera_on || data.openmv_connected) {
+  const shouldSyncConfig = Date.now() >= configSyncPausedUntil && !isConfigEditing();
+  if ((data.camera_on || data.openmv_connected) && shouldSyncConfig) {
     cameraType.value = remoteType;
   }
   openmvPanel.classList.toggle('d-none', cameraType.value !== 'openmv');
@@ -118,7 +128,7 @@ async function refreshSystem() {
   modelMeta.textContent = `模型：${data.model_name || '-'} | ${data.model_loaded ? '已加载' : '未加载'}`;
 
   const cfg = data.openmv_settings || {};
-  patchConfigInputs(cfg);
+  if (shouldSyncConfig) patchConfigInputs(cfg);
   document.getElementById('cfgMeta1').textContent = `波特率：${cfg.baudrate || '-'} | 曝光：${cfg.exposure || '-'} | 增益：${cfg.gain || '-'}`;
   document.getElementById('cfgMeta2').textContent = `超时：${cfg.serial_timeout || '-'}ms | 自动白平衡：${cfg.auto_white_balance ? '开' : '关'} | 镜像：${cfg.flip_horizontal ? 'H' : '-'}${cfg.flip_vertical ? 'V' : '-'}`;
 
@@ -257,6 +267,7 @@ document.getElementById('applyCameraCfgBtn').onclick = async () => {
     flip_vertical: document.getElementById('cfgFlipV').checked,
   };
   const resp = await postApi('/api/openmv/settings', payload);
+  configSyncPausedUntil = Date.now() + 5000;
   if (resp.ok && cameraType.value === 'local' && stream) {
     const track = stream.getVideoTracks()[0];
     if (track?.applyConstraints) {
