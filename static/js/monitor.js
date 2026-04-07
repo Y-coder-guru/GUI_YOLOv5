@@ -6,6 +6,7 @@ const countList = document.getElementById('countList');
 const statusText = document.getElementById('statusText');
 const cameraMeta = document.getElementById('cameraMeta');
 const perfMeta = document.getElementById('perfMeta');
+const modelMeta = document.getElementById('modelMeta');
 const cameraType = document.getElementById('cameraType');
 const openmvPanel = document.getElementById('openmvPanel');
 const openmvConnStatus = document.getElementById('openmvConnStatus');
@@ -112,6 +113,7 @@ async function refreshSystem() {
   statusText.textContent = `状态：${data.detection_on ? '运行中' : (data.camera_on ? '摄像头已开启' : '待机')}`;
   cameraMeta.textContent = `类型：${data.camera_type || '-'} | 分辨率：${data.openmv_settings?.resolution || '-'} | 帧率：${data.openmv_settings?.fps || '-'}fps`;
   perfMeta.textContent = `推理耗时：${data.last_inference_ms || '-'}ms`;
+  modelMeta.textContent = `模型：${data.model_name || '-'} | ${data.model_loaded ? '已加载' : '未加载'}`;
 
   const cfg = data.openmv_settings || {};
   patchConfigInputs(cfg);
@@ -124,7 +126,16 @@ async function refreshSystem() {
 }
 
 async function pollDetection() {
-  const data = await fetch('/api/detection/frame-data').then((r) => r.json());
+  let payload = null;
+  if (cameraType.value === 'local' && stream) {
+    const cap = document.createElement('canvas');
+    cap.width = video.videoWidth || 640;
+    cap.height = video.videoHeight || 480;
+    const capCtx = cap.getContext('2d');
+    capCtx.drawImage(video, 0, 0, cap.width, cap.height);
+    payload = { frame: cap.toDataURL('image/jpeg', 0.72) };
+  }
+  const data = await postApi('/api/detection/frame-data', payload);
   if (!data.ok) {
     statusText.textContent = `状态：${data.message || '错误'}`;
     return;
@@ -174,11 +185,16 @@ async function ensureCameraPreview(data) {
     video.classList.remove('d-none');
     if (!stream) {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
         video.srcObject = stream;
       } catch (e) {
-        statusText.textContent = '状态：无法恢复本地摄像头画面（请检查权限）';
-        await postApi('/api/camera/stop');
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          video.srcObject = stream;
+        } catch (fallbackError) {
+          statusText.textContent = '状态：无法恢复本地摄像头画面（请检查权限）';
+          await postApi('/api/camera/stop');
+        }
       }
     }
     if (frameTimer) {

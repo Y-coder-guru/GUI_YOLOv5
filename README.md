@@ -1,4 +1,4 @@
-# YOLOv8 Flask 监控管理系统（前端展示 + 模型接口预留）
+# YOLOv5 Flask 监控管理系统（前端展示 + 模型接口预留）
 
 ## 1. 功能概览
 - 用户注册 / 登录 / 持久化记忆（SQLite）
@@ -12,7 +12,7 @@
 
 ## 2. 项目结构
 ```bash
-YOLOv8__GUI/
+GUI_YOLOv5/
 ├── app.py
 ├── requirements.txt
 ├── README.md
