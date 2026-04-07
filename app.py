@@ -445,10 +445,12 @@ def init_db():
         if "avatar_url" not in user_columns:
             db.session.execute(text("ALTER TABLE user ADD COLUMN avatar_url VARCHAR(255) NOT NULL DEFAULT ''"))
             db.session.commit()
+
         ensure_column("detection_record", "operator_name", "VARCHAR(50) NOT NULL DEFAULT 'system'")
         ensure_column("detection_record", "operation_type", "VARCHAR(50) NOT NULL DEFAULT '目标检测'")
         ensure_column("detection_record", "note", "VARCHAR(255) NOT NULL DEFAULT ''")
         ensure_column("system_log", "operator", "VARCHAR(50) NOT NULL DEFAULT 'system'")
+
         ensure_column("system_log", "ip", "VARCHAR(64) NOT NULL DEFAULT '-'")
         ensure_column("system_log", "result", "VARCHAR(20) NOT NULL DEFAULT '成功'")
 
