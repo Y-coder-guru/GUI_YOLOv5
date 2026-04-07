@@ -2,6 +2,8 @@ const userList = document.getElementById('userList');
 const logList = document.getElementById('logList');
 let logOffset = 0;
 const logPageSize = 20;
+let userOffset = 0;
+const userPageSize = 20;
 
 let canManageUsers = false;
 let adminLoadFailed = false;
@@ -88,8 +90,14 @@ async function refreshAdmin() {
 
   userList.innerHTML = "";
   const userEmpty = document.getElementById("userEmpty");
-  if (userEmpty) userEmpty.classList.toggle("d-none", (data.users || []).length > 0);
-  (data.users || []).forEach((u) => {
+  const allUsers = data.users || [];
+  const pagedUsers = allUsers.slice(userOffset, userOffset + userPageSize);
+  if (userOffset > 0 && pagedUsers.length === 0) {
+    userOffset = Math.max(0, userOffset - userPageSize);
+  }
+  const effectivePagedUsers = allUsers.slice(userOffset, userOffset + userPageSize);
+  if (userEmpty) userEmpty.classList.toggle("d-none", effectivePagedUsers.length > 0);
+  effectivePagedUsers.forEach((u) => {
     const li = document.createElement('li');
     li.className = 'list-group-item';
     li.innerHTML = `<div><b>${u.username}</b> (${u.is_admin ? '管理员' : '普通用户'}) / ${u.status}</div>
@@ -137,6 +145,11 @@ async function refreshAdmin() {
     };
     userList.appendChild(li);
   });
+
+  const prevUserPageBtn = document.getElementById('prevUserPage');
+  const nextUserPageBtn = document.getElementById('nextUserPage');
+  if (prevUserPageBtn) prevUserPageBtn.disabled = userOffset <= 0;
+  if (nextUserPageBtn) nextUserPageBtn.disabled = (userOffset + userPageSize) >= allUsers.length;
 
   logList.innerHTML = '';
   data.logs.forEach((l) => {
@@ -229,6 +242,20 @@ document.getElementById('nextLogPage').onclick = () => {
   logOffset += logPageSize;
   refreshAdmin();
 };
+const prevUserPageBtn = document.getElementById('prevUserPage');
+if (prevUserPageBtn) {
+  prevUserPageBtn.onclick = () => {
+    userOffset = Math.max(0, userOffset - userPageSize);
+    refreshAdmin();
+  };
+}
+const nextUserPageBtn = document.getElementById('nextUserPage');
+if (nextUserPageBtn) {
+  nextUserPageBtn.onclick = () => {
+    userOffset += userPageSize;
+    refreshAdmin();
+  };
+}
 
 
 if (userList && logList) {
