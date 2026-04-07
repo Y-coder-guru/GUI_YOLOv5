@@ -135,6 +135,9 @@ async function pollDetection() {
     capCtx.drawImage(video, 0, 0, cap.width, cap.height);
     payload = { frame: cap.toDataURL('image/jpeg', 0.72) };
   }
+  if (cameraType.value === 'openmv' && openmvImage?.src?.startsWith('data:image')) {
+    payload = { frame: openmvImage.src };
+  }
   const data = await postApi('/api/detection/frame-data', payload);
   if (!data.ok) {
     statusText.textContent = `状态：${data.message || '错误'}`;
@@ -294,7 +297,8 @@ document.getElementById('openCameraBtn').onclick = async () => {
     showToast(resp.message || '摄像头开启失败', 'warning');
     return;
   }
-  showToast('摄像头已开启');
+  ensureDetectionPolling(!!resp.detection_on);
+  showToast(resp.detection_on ? '摄像头已开启，检测已自动开始' : '摄像头已开启');
   await refreshSystem();
 };
 
