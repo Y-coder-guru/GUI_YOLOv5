@@ -25,7 +25,9 @@ async function postApi(url, payload) {
     headers: { 'Content-Type': 'application/json' },
     body: payload ? JSON.stringify(payload) : null,
   });
-  return res.json();
+  const data = await res.json().catch(() => ({ ok: false, message: '接口返回异常' }));
+  if (!res.ok) return { ok: false, message: data.message || `请求失败(${res.status})` };
+  return data;
 }
 
 function formatDuration(ms) {
@@ -135,6 +137,9 @@ async function pollDetection() {
     capCtx.drawImage(video, 0, 0, cap.width, cap.height);
     payload = { frame: cap.toDataURL('image/jpeg', 0.72) };
   }
+  if (cameraType.value === 'openmv' && openmvImage?.src?.startsWith('data:image')) {
+    payload = { frame: openmvImage.src };
+  }
   const data = await postApi('/api/detection/frame-data', payload);
   if (!data.ok) {
     statusText.textContent = `状态：${data.message || '错误'}`;
@@ -240,6 +245,7 @@ document.getElementById('openmvMode').onchange = (e) => {
 
 document.getElementById('applyCameraCfgBtn').onclick = async () => {
   const payload = {
+    camera_type: cameraType.value,
     resolution: document.getElementById('cfgResolution').value,
     fps: Number(document.getElementById('cfgFps').value || 15),
     exposure: Number(document.getElementById('cfgExposure').value || 50),
@@ -251,7 +257,20 @@ document.getElementById('applyCameraCfgBtn').onclick = async () => {
     flip_vertical: document.getElementById('cfgFlipV').checked,
   };
   const resp = await postApi('/api/openmv/settings', payload);
-  showToast(resp.ok ? '摄像头参数已应用' : '参数应用失败', resp.ok ? 'success' : 'danger');
+  if (resp.ok && cameraType.value === 'local' && stream) {
+    const track = stream.getVideoTracks()[0];
+    if (track?.applyConstraints) {
+      const fps = Number(payload.fps || 15);
+      const widthMap = { QVGA: 320, VGA: 640, '720P': 1280, '1080P': 1920 };
+      const width = widthMap[payload.resolution] || 1280;
+      try {
+        await track.applyConstraints({ width: { ideal: width }, frameRate: { ideal: fps, max: fps } });
+      } catch (e) {
+        showToast('本地摄像头不支持该参数，已尽量应用', 'warning');
+      }
+    }
+  }
+  showToast(resp.ok ? '摄像头参数已应用' : (resp.message || '参数应用失败'), resp.ok ? 'success' : 'danger');
   await refreshSystem();
 };
 
@@ -294,7 +313,8 @@ document.getElementById('openCameraBtn').onclick = async () => {
     showToast(resp.message || '摄像头开启失败', 'warning');
     return;
   }
-  showToast('摄像头已开启');
+  ensureDetectionPolling(!!resp.detection_on);
+  showToast(resp.detection_on ? '摄像头已开启，检测已自动开始' : '摄像头已开启');
   await refreshSystem();
 };
 
@@ -321,7 +341,8 @@ document.getElementById('startDetBtn').onclick = async () => {
 document.getElementById('stopDetBtn').onclick = async () => {
   await postApi('/api/detection/stop');
   ensureDetectionPolling(false);
-  statusText.textContent = '状态：待机';
+  statusText.textContent = '状态：检测已停止（画面保留）';
+  showToast('已停止检测，画面保留但不再框选目标', 'secondary');
 };
 
 document.getElementById('fullscreenBtn').onclick = async () => {

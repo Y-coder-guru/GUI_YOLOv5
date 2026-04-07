@@ -186,8 +186,8 @@ class YoloModelService:
                 if self.model_path.exists():
                     self.model = YOLO(str(self.model_path))
                 else:
-                    self.model = YOLO("yolov5su.pt")
-                    self.model_name = "yolov5su.pt (fallback)"
+                    self.model = None
+                    self.model_name = f"{self.model_path.name} (missing, using demo mode)"
             except Exception:
                 self.model = None
 
@@ -417,6 +417,14 @@ def init_db():
     with app.app_context():
         db.create_all()
         inspector = inspect(db.engine)
+
+        def ensure_column(table: str, name: str, ddl: str):
+            columns = {col["name"] for col in inspector.get_columns(table)}
+            if name in columns:
+                return
+            db.session.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+            db.session.commit()
+
         user_columns = {col["name"] for col in inspector.get_columns("user")}
         if "is_active_account" not in user_columns:
             db.session.execute(
@@ -437,6 +445,12 @@ def init_db():
         if "avatar_url" not in user_columns:
             db.session.execute(text("ALTER TABLE user ADD COLUMN avatar_url VARCHAR(255) NOT NULL DEFAULT ''"))
             db.session.commit()
+        ensure_column("detection_record", "operator_name", "VARCHAR(50) NOT NULL DEFAULT 'system'")
+        ensure_column("detection_record", "operation_type", "VARCHAR(50) NOT NULL DEFAULT '目标检测'")
+        ensure_column("detection_record", "note", "VARCHAR(255) NOT NULL DEFAULT ''")
+        ensure_column("system_log", "operator", "VARCHAR(50) NOT NULL DEFAULT 'system'")
+        ensure_column("system_log", "ip", "VARCHAR(64) NOT NULL DEFAULT '-'")
+        ensure_column("system_log", "result", "VARCHAR(20) NOT NULL DEFAULT '成功'")
 
         saved_openmv = get_config_json("openmv_settings", openmv_settings.copy())
         openmv_settings.update(saved_openmv)
@@ -497,6 +511,19 @@ def parse_time_range(range_key: str, start_time: str, end_time: str):
 def make_session_permanent():
     if current_user.is_authenticated:
         session.permanent = True
+        now_ts = int(time.time())
+        last_heartbeat = int(session.get("heartbeat_at", 0) or 0)
+        if now_ts - last_heartbeat >= 60:
+            current_user.last_login_at = datetime.utcnow()
+            db.session.commit()
+            session["heartbeat_at"] = now_ts
+
+
+def scoped_detection_query():
+    query = DetectionRecord.query
+    if not current_user.is_admin:
+        query = query.filter(DetectionRecord.user_id == current_user.id)
+    return query
 
 
 def _cleanup_db_session(exception=None):
@@ -854,12 +881,13 @@ def start_camera():
 
     runtime_state["camera_type"] = camera_type
     runtime_state["camera_on"] = True
+    runtime_state["detection_on"] = True
     runtime_state["camera_state"] = "已连接"
     if runtime_state["camera_started_at"] is None:
         runtime_state["camera_started_at"] = time.time()
 
-    add_log("device", f"摄像头已开启({camera_type})", current_user.id)
-    return jsonify({"ok": True, "camera_on": True, "camera_type": camera_type})
+    add_log("device", f"摄像头已开启({camera_type})并自动开始检测", current_user.id)
+    return jsonify({"ok": True, "camera_on": True, "camera_type": camera_type, "detection_on": True})
 
 
 @app.post("/api/camera/stop")
@@ -950,7 +978,7 @@ def frame_data():
 def live_stats():
     now = datetime.utcnow()
     today_start = datetime(now.year, now.month, now.day)
-    today_records = DetectionRecord.query.filter(DetectionRecord.detect_time >= today_start).all()
+    today_records = scoped_detection_query().filter(DetectionRecord.detect_time >= today_start).all()
 
     total_events = len(today_records)
     total_objects = sum(r.count for r in today_records)
@@ -962,15 +990,16 @@ def live_stats():
     for r in today_records:
         hourly[r.detect_time.hour] += r.count
 
+    timeline_window_start = now - timedelta(minutes=1)
+    recent_records = scoped_detection_query().filter(DetectionRecord.detect_time >= timeline_window_start).all()
+    sec_bucket = Counter()
+    for record in recent_records:
+        sec_bucket[record.detect_time.strftime("%H:%M:%S")] += record.count
     timeline = []
     for i in range(20):
         t = now - timedelta(seconds=(19 - i) * 3)
-        timeline.append(
-            {
-                "time": t.strftime("%H:%M:%S"),
-                "value": random.randint(0, 10) if runtime_state["detection_on"] else 0,
-            }
-        )
+        key = t.strftime("%H:%M:%S")
+        timeline.append({"time": key, "value": sec_bucket.get(key, 0)})
 
     return jsonify(
         {
@@ -978,11 +1007,15 @@ def live_stats():
             "cards": {
                 "today_events": total_events,
                 "today_objects": total_objects,
-                "active_users": User.query.count(),
+                "active_users": User.query.filter(
+                    User.is_active_account.is_(True),
+                    User.last_login_at.isnot(None),
+                    User.last_login_at >= now - timedelta(minutes=5),
+                ).count(),
                 "camera_type": runtime_state["camera_type"],
                 "resolution": openmv_settings["resolution"],
                 "fps": openmv_settings["fps"],
-                "inference_ms": runtime_state["last_inference_ms"] or random.randint(25, 80),
+                "inference_ms": runtime_state["last_inference_ms"],
                 "camera_on": runtime_state["camera_on"],
                 "camera_state": runtime_state["camera_state"],
                 "openmv_settings": openmv_settings,
@@ -1010,7 +1043,7 @@ def advanced_stats():
     if not start or not end:
         return jsonify({"ok": False, "message": "自定义时间格式错误"}), 400
 
-    records = DetectionRecord.query.filter(
+    records = scoped_detection_query().filter(
         DetectionRecord.detect_time >= start,
         DetectionRecord.detect_time <= end,
     )
@@ -1039,7 +1072,7 @@ def advanced_stats():
             "timeline": timeline,
             "pie": [{"name": n, "value": v} for n, v in cate.items()],
             "bar": bar_data,
-            "categories": sorted(list({r.category for r in DetectionRecord.query.all()})),
+            "categories": sorted(list({r.category for r in scoped_detection_query().all()})),
             "total": total,
             "range": {"start": start.isoformat(sep=" "), "end": end.isoformat(sep=" ")},
         }
@@ -1050,7 +1083,7 @@ def advanced_stats():
 @login_required
 def export_stats():
     fmt = request.args.get("format", "csv").lower()
-    query = DetectionRecord.query
+    query = scoped_detection_query()
     keyword = request.args.get("keyword", "").strip()
     category = request.args.get("category", "").strip()
     note = request.args.get("note", "").strip()
@@ -1127,7 +1160,7 @@ def clear_history():
 @app.get("/api/history")
 @login_required
 def get_history():
-    query = DetectionRecord.query
+    query = scoped_detection_query()
     keyword = request.args.get("keyword", "").strip()
     category = request.args.get("category", "").strip()
     note = request.args.get("note", "").strip()
