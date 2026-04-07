@@ -67,7 +67,7 @@ async function loadHistory() {
   });
 
   const totalPage = Math.max(1, Math.ceil(lastTotal / pageSize));
-  pageInfo.textContent = `共 ${lastTotal} 条，当前第 ${page}/${totalPage} 页`;
+  pageInfo.textContent = `共 ${lastTotal} 条（每页 ${pageSize} 条，可滚动查看），当前第 ${page}/${totalPage} 页`;
 }
 
 document.getElementById('searchBtn').onclick = () => { page = 1; loadHistory(); };
