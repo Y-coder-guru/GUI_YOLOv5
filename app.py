@@ -417,6 +417,14 @@ def init_db():
     with app.app_context():
         db.create_all()
         inspector = inspect(db.engine)
+
+        def ensure_column(table: str, name: str, ddl: str):
+            columns = {col["name"] for col in inspector.get_columns(table)}
+            if name in columns:
+                return
+            db.session.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+            db.session.commit()
+
         user_columns = {col["name"] for col in inspector.get_columns("user")}
         if "is_active_account" not in user_columns:
             db.session.execute(
@@ -437,6 +445,10 @@ def init_db():
         if "avatar_url" not in user_columns:
             db.session.execute(text("ALTER TABLE user ADD COLUMN avatar_url VARCHAR(255) NOT NULL DEFAULT ''"))
             db.session.commit()
+        ensure_column("detection_record", "operation_type", "VARCHAR(50) NOT NULL DEFAULT '目标检测'")
+        ensure_column("detection_record", "note", "VARCHAR(255) NOT NULL DEFAULT ''")
+        ensure_column("system_log", "ip", "VARCHAR(64) NOT NULL DEFAULT '-'")
+        ensure_column("system_log", "result", "VARCHAR(20) NOT NULL DEFAULT '成功'")
 
         saved_openmv = get_config_json("openmv_settings", openmv_settings.copy())
         openmv_settings.update(saved_openmv)
@@ -854,12 +866,13 @@ def start_camera():
 
     runtime_state["camera_type"] = camera_type
     runtime_state["camera_on"] = True
+    runtime_state["detection_on"] = True
     runtime_state["camera_state"] = "已连接"
     if runtime_state["camera_started_at"] is None:
         runtime_state["camera_started_at"] = time.time()
 
-    add_log("device", f"摄像头已开启({camera_type})", current_user.id)
-    return jsonify({"ok": True, "camera_on": True, "camera_type": camera_type})
+    add_log("device", f"摄像头已开启({camera_type})并自动开始检测", current_user.id)
+    return jsonify({"ok": True, "camera_on": True, "camera_type": camera_type, "detection_on": True})
 
 
 @app.post("/api/camera/stop")
