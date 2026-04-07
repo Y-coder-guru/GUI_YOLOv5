@@ -241,12 +241,17 @@ body {
   min-height: 39px;
   margin-bottom: 8px;
 }
-.admin-scroll-list .list-group-item,
+
+.admin-scroll-list .list-group-item {
+  padding: 10px 12px;
+  line-height: 1.45;
+}
 .log-scroll .list-group-item {
-  min-height: 72px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+  padding: 12px;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.55;
+
 }
 
 @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(8px);} to { opacity: 1; transform: translateY(0);} }
