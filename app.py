@@ -13,6 +13,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from flask import (
@@ -53,6 +54,11 @@ try:
     from ultralytics import YOLO
 except ImportError:  # pragma: no cover
     YOLO = None
+
+try:
+    import cv2
+except ImportError:  # pragma: no cover
+    cv2 = None
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "instance" / "yolo_monitor.db"
@@ -154,9 +160,9 @@ def load_user(user_id: str):
 
 class YoloModelService:
     """
-    模型替换说明（后续你接入真实 YOLO 时只改这里）：
-    1) 把训练好的权重放到: /workspace/YOLOv8__GUI/models/best.pt
-    2) 在 `predict_from_frame` 内部加载你的模型并做推理。
+    模型说明：
+    1) 默认优先加载仓库根目录 `yolov5s.pt`。
+    2) 支持环境变量 YOLO_MODEL_PATH 指定权重路径。
     3) 保持返回格式不变，前端与数据库将自动复用。
 
     返回格式:
@@ -169,22 +175,28 @@ class YoloModelService:
     """
 
     def __init__(self):
-        self.model_path = BASE_DIR / "models" / "best.pt"
+        custom_path = os.getenv("YOLO_MODEL_PATH", "").strip()
+        self.model_path = Path(custom_path) if custom_path else (BASE_DIR / "yolov5s.pt")
+        if not self.model_path.exists():
+            self.model_path = BASE_DIR / "models" / "best.pt"
         self.model = None
+        self.model_name = self.model_path.name
         if YOLO:
             try:
                 if self.model_path.exists():
                     self.model = YOLO(str(self.model_path))
                 else:
-                    self.model = YOLO("yolov8n.pt")
+                    self.model = YOLO("yolov5su.pt")
+                    self.model_name = "yolov5su.pt (fallback)"
             except Exception:
                 self.model = None
 
     def predict_from_frame(self, frame_meta: dict | None = None) -> dict:
         if self.model:
-            # 演示环境优先使用本地测试图，避免 URL 不可用。
-            demo_img = BASE_DIR / "static" / "img" / "yolo_demo.jpg"
-            source = str(demo_img) if demo_img.exists() else "https://ultralytics.com/images/bus.jpg"
+            source = frame_meta.get("frame_array") if frame_meta else None
+            if source is None:
+                demo_img = BASE_DIR / "static" / "img" / "yolo_demo.jpg"
+                source = str(demo_img) if demo_img.exists() else "https://ultralytics.com/images/bus.jpg"
             result = self.model.predict(source=source, verbose=False)[0]
             boxes = []
             counts = Counter()
@@ -695,6 +707,9 @@ def system_status():
             "camera_started_at": runtime_state["camera_started_at"],
             "last_inference_ms": runtime_state["last_inference_ms"],
             "today_detection_seconds": get_today_detection_seconds(),
+            "model_name": model_service.model_name,
+            "model_path": str(model_service.model_path),
+            "model_loaded": bool(model_service.model),
 
             "server_time": bjt_now().strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -807,6 +822,9 @@ def openmv_disconnect():
 @login_required
 def update_openmv_settings():
     payload = request.get_json(silent=True) or {}
+    camera_type = (payload.get("camera_type") or runtime_state.get("camera_type") or "local").strip().lower()
+    if camera_type in {"local", "openmv"}:
+        runtime_state["camera_type"] = camera_type
     openmv_settings["camera_id"] = int(payload.get("camera_id", openmv_settings.get("camera_id", 0)))
     openmv_settings["resolution"] = payload.get("resolution", openmv_settings["resolution"])
     openmv_settings["fps"] = int(payload.get("fps", openmv_settings["fps"]))
@@ -881,7 +899,7 @@ def stop_detection():
     return jsonify({"ok": True, "detection_on": False})
 
 
-@app.get("/api/detection/frame-data")
+@app.route("/api/detection/frame-data", methods=["GET", "POST"])
 @login_required
 def frame_data():
     if not runtime_state["camera_on"]:
@@ -890,7 +908,21 @@ def frame_data():
     if not runtime_state["detection_on"]:
         return jsonify({"ok": True, "boxes": [], "counts": {}, "detection_on": False})
 
+    payload = request.get_json(silent=True) or {}
     frame_meta = {"source": runtime_state["camera_type"], "openmv": openmv_settings}
+    frame_b64 = (payload.get("frame") or "").strip()
+    if frame_b64:
+        if "," in frame_b64:
+            frame_b64 = frame_b64.split(",", 1)[1]
+        try:
+            raw = base64.b64decode(frame_b64)
+            if cv2 is not None:
+                npbuf = np.frombuffer(raw, dtype=np.uint8)
+                frame = cv2.imdecode(npbuf, cv2.IMREAD_COLOR)
+                if frame is not None:
+                    frame_meta["frame_array"] = frame
+        except Exception:
+            pass
     infer_start = time.perf_counter()
     result = model_service.predict_from_frame(frame_meta=frame_meta)
     runtime_state["last_inference_ms"] = round((time.perf_counter() - infer_start) * 1000, 2)

@@ -174,6 +174,7 @@ document.getElementById('openCreateUser').onclick = async () => {
 
 document.getElementById('saveOpenmvCfg').onclick = async () => {
   const payload = {
+    camera_type: document.getElementById('cfgCameraType').value,
     camera_id: Number(document.getElementById('cfgCameraId').value || 0),
     resolution: document.getElementById('cfgRes').value,
     fps: Number(document.getElementById('cfgFps').value || 15),

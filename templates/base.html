@@ -14,7 +14,7 @@
 
     <button class="btn btn-sm sidebar-toggle-btn" id="sidebarToggleBtn" title="折叠侧边栏" aria-label="折叠侧边栏" type="button"><span class="sidebar-toggle-icon">☰</span></button>
 
-    <h4 class="mb-4 mt-2 sidebar-brand">YOLOv8 GUI</h4>
+    <h4 class="mb-4 mt-2 sidebar-brand">YOLOv5 GUI</h4>
     <a href="{{ url_for('monitor') }}" class="nav-link {% if request.path.startswith('/monitor') %}active{% endif %}"><span class="nav-icon">📷</span><span class="nav-text">实时监控</span></a>
     <a href="{{ url_for('stats_page') }}" class="nav-link {% if request.path.startswith('/stats') %}active{% endif %}"><span class="nav-icon">📊</span><span class="nav-text">数据统计</span></a>
     <a href="{{ url_for('history_page') }}" class="nav-link {% if request.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">🧾</span><span class="nav-text">检测记录</span></a>
@@ -26,7 +26,7 @@
     <div class="sidebar-footer mt-auto pt-3">
       <div>版本：v1.2.0</div>
       <div>状态：<span id="sidebarSystemState">运行中</span></div>
-      <div>© 2026 YOLOv8 GUI</div>
+      <div>© 2026 YOLOv5 GUI</div>
     </div>
   </aside>
   {% endif %}
