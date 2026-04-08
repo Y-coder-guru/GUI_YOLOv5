@@ -63,6 +63,13 @@ except ImportError:  # pragma: no cover
     torch = None
 
 try:
+
+    import yolov5
+except ImportError:  # pragma: no cover
+    yolov5 = None
+
+try:
+
     import cv2
 except ImportError:  # pragma: no cover
     cv2 = None
@@ -235,10 +242,18 @@ class YoloModelService:
                 self.load_error = ""
 
                 self.model_name = self.model_path.name
-
                 return
             except Exception as exc:
                 self.load_error = f"legacy加载失败: {exc}"
+        if yolov5:
+            try:
+                self.model = yolov5.load(str(self.model_path))
+                self.backend = "yolov5_pkg"
+                self.load_error = ""
+                self.model_name = self.model_path.name
+                return
+            except Exception as exc:
+                self.load_error = f"yolov5包加载失败: {exc}"
 
         self.model = None
 
@@ -301,8 +316,26 @@ class YoloModelService:
                 counts[label] += 1
             return {"boxes": boxes, "counts": dict(counts)}
 
-        # 模型未加载成功时，不再返回随机演示框，避免误导业务判断。
+        if self.model and self.backend == "yolov5_pkg":
+            source = frame_meta.get("frame_array") if frame_meta else None
+            if source is None:
+                demo_img = BASE_DIR / "static" / "img" / "yolo_demo.jpg"
+                source = str(demo_img) if demo_img.exists() else "https://ultralytics.com/images/bus.jpg"
+            result = self.model(source)
+            boxes = []
+            counts = Counter()
+            arr = result.xyxy[0].cpu().numpy() if hasattr(result, "xyxy") else []
+            names = getattr(self.model, "names", {}) or {}
+            for row in arr:
+                x1, y1, x2, y2, conf, cls_id = row[:6]
+                cls_idx = int(cls_id)
+                label = names.get(cls_idx, str(cls_idx)) if isinstance(names, dict) else str(cls_idx)
+                conf = round(float(conf), 2)
+                boxes.append({"x": int(x1), "y": int(y1), "w": max(0, int(x2 - x1)), "h": max(0, int(y2 - y1)), "label": label, "conf": conf})
+                counts[label] += 1
+            return {"boxes": boxes, "counts": dict(counts)}
 
+        # 模型未加载成功时，不再返回随机演示框，避免误导业务判断。
         return {"boxes": [], "counts": {}, "message": f"模型未加载：{self.load_error or self.model_name}"}
 
 
@@ -597,9 +630,9 @@ def init_db():
             db.engine.dispose()
 
             broken_path = DB_PATH
-            backup_path = DB_PATH.with_name(
-                f"{DB_PATH.stem}.corrupt.{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}{DB_PATH.suffix}"
-            )
+
+            backup_path = DB_PATH.with_name(f"{DB_PATH.stem}.corrupt.backup{DB_PATH.suffix}")
+
             if broken_path.exists():
                 os.replace(broken_path, backup_path)
             for sidecar in (f"{broken_path}-wal", f"{broken_path}-shm"):
@@ -886,9 +919,6 @@ def system_status():
             "model_backend": model_service.backend,
             "model_error": model_service.load_error,
 
-            "model_backend": model_service.backend,
-
-            "model_error": model_service.load_error,
 
             "server_time": bjt_now().strftime("%Y-%m-%d %H:%M:%S"),
         }
