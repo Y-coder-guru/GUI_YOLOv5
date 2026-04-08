@@ -63,11 +63,13 @@ except ImportError:  # pragma: no cover
     torch = None
 
 try:
+
     import yolov5
 except ImportError:  # pragma: no cover
     yolov5 = None
 
 try:
+
     import cv2
 except ImportError:  # pragma: no cover
     cv2 = None
@@ -173,8 +175,10 @@ def load_user(user_id: str):
 class YoloModelService:
     """
     模型说明：
+
     1) 默认优先加载仓库根目录 `best.pt`（用户自训练权重）。
     2) 若 `best.pt` 不存在，再尝试环境变量 YOLO_MODEL_PATH 指定权重。
+
     3) 保持返回格式不变，前端与数据库将自动复用。
 
     返回格式:
@@ -188,15 +192,18 @@ class YoloModelService:
 
     def __init__(self):
         custom_path = os.getenv("YOLO_MODEL_PATH", "").strip()
+
         preferred = [BASE_DIR / "best.pt"]
         if custom_path:
             preferred.append(Path(custom_path))
         preferred.extend([BASE_DIR / "models" / "best.pt", BASE_DIR / "yolov5s.pt"])
         self.model_path = next((p for p in preferred if p.exists()), BASE_DIR / "best.pt")
+
         self.model = None
         self.backend = ""
         self.model_name = self.model_path.name
         self.load_error = ""
+
         self.model_mtime = 0.0
         self.reload(force=True)
 
@@ -206,17 +213,22 @@ class YoloModelService:
         if not self.model_path.exists():
             self.model = None
             self.backend = ""
+
             self.model_name = f"{self.model_path.name} (missing)"
             self.load_error = f"模型文件不存在: {self.model_path}"
             return
 
+
         self.model_mtime = self.model_path.stat().st_mtime
+
         if YOLO:
             try:
                 self.model = YOLO(str(self.model_path))
                 self.backend = "ultralytics"
+
                 self.load_error = ""
                 self.model_name = self.model_path.name
+
                 return
             except Exception as exc:
                 self.load_error = f"ultralytics加载失败: {exc}"
@@ -228,6 +240,7 @@ class YoloModelService:
                 self.model.conf = 0.25
                 self.backend = "torch_hub_yolov5"
                 self.load_error = ""
+
                 self.model_name = self.model_path.name
                 return
             except Exception as exc:
@@ -243,6 +256,7 @@ class YoloModelService:
                 self.load_error = f"yolov5包加载失败: {exc}"
 
         self.model = None
+
         self.backend = ""
         self.model_name = f"{self.model_path.name} (load failed)"
 
@@ -255,6 +269,7 @@ class YoloModelService:
                 pass
         self._load_once()
         return bool(self.model)
+
 
     def predict_from_frame(self, frame_meta: dict | None = None) -> dict:
         if self.model and self.backend == "ultralytics":
@@ -300,6 +315,7 @@ class YoloModelService:
                 )
                 counts[label] += 1
             return {"boxes": boxes, "counts": dict(counts)}
+
         if self.model and self.backend == "yolov5_pkg":
             source = frame_meta.get("frame_array") if frame_meta else None
             if source is None:
@@ -321,6 +337,7 @@ class YoloModelService:
 
         # 模型未加载成功时，不再返回随机演示框，避免误导业务判断。
         return {"boxes": [], "counts": {}, "message": f"模型未加载：{self.load_error or self.model_name}"}
+
 
 
 model_service = YoloModelService()
@@ -593,23 +610,29 @@ def init_db():
             is_malformed = "database disk image is malformed" in err or "malformed" in err
             if not (IS_SQLITE and is_malformed):
                 raise
+
             auto_repair = os.getenv("SQLITE_AUTO_REPAIR", "1").strip().lower() in {"1", "true", "yes", "on"}
             if not auto_repair:
                 app.logger.error(
                     "检测到 SQLite 数据库损坏（%s），已按配置关闭自动重建。"
+
                     "如需自动备份并重建，请设置环境变量 SQLITE_AUTO_REPAIR=1 后重启。",
                     DB_PATH,
                 )
                 raise RuntimeError(
+
                     "SQLite 数据库损坏，且当前配置已关闭自动重建。"
                     "请先备份数据库并尝试修复，或设置 SQLITE_AUTO_REPAIR=1 再启动。"
                 ) from exc
+
 
             db.session.remove()
             db.engine.dispose()
 
             broken_path = DB_PATH
+
             backup_path = DB_PATH.with_name(f"{DB_PATH.stem}.corrupt.backup{DB_PATH.suffix}")
+
             if broken_path.exists():
                 os.replace(broken_path, backup_path)
             for sidecar in (f"{broken_path}-wal", f"{broken_path}-shm"):
@@ -895,6 +918,7 @@ def system_status():
             "model_loaded": bool(model_service.model),
             "model_backend": model_service.backend,
             "model_error": model_service.load_error,
+
 
             "server_time": bjt_now().strftime("%Y-%m-%d %H:%M:%S"),
         }
