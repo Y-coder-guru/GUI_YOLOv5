@@ -7,7 +7,6 @@ import re
 import sqlite3
 
 import time
-import random
 import socket
 import urllib.request
 from collections import Counter
@@ -163,8 +162,10 @@ def load_user(user_id: str):
 class YoloModelService:
     """
     模型说明：
-    1) 默认优先加载仓库根目录 `best.pt`。
-    2) 支持环境变量 YOLO_MODEL_PATH 指定权重路径。
+
+    1) 默认优先加载仓库根目录 `best.pt`（用户自训练权重）。
+    2) 若 `best.pt` 不存在，再尝试环境变量 YOLO_MODEL_PATH 指定权重。
+
     3) 保持返回格式不变，前端与数据库将自动复用。
 
     返回格式:
@@ -178,11 +179,13 @@ class YoloModelService:
 
     def __init__(self):
         custom_path = os.getenv("YOLO_MODEL_PATH", "").strip()
+
+        preferred = [BASE_DIR / "best.pt"]
         if custom_path:
-            self.model_path = Path(custom_path)
-        else:
-            preferred = [BASE_DIR / "best.pt", BASE_DIR / "yolov5s.pt", BASE_DIR / "models" / "best.pt"]
-            self.model_path = next((p for p in preferred if p.exists()), preferred[0])
+            preferred.append(Path(custom_path))
+        preferred.extend([BASE_DIR / "models" / "best.pt", BASE_DIR / "yolov5s.pt"])
+        self.model_path = next((p for p in preferred if p.exists()), BASE_DIR / "best.pt")
+
         self.model = None
         self.model_name = self.model_path.name
         if YOLO:
@@ -191,9 +194,10 @@ class YoloModelService:
                     self.model = YOLO(str(self.model_path))
                 else:
                     self.model = None
-                    self.model_name = f"{self.model_path.name} (missing, using demo mode)"
+                    self.model_name = f"{self.model_path.name} (missing)"
             except Exception:
                 self.model = None
+                self.model_name = f"{self.model_path.name} (load failed)"
 
     def predict_from_frame(self, frame_meta: dict | None = None) -> dict:
         if self.model:
@@ -213,20 +217,8 @@ class YoloModelService:
                 counts[label] += 1
             return {"boxes": boxes, "counts": dict(counts)}
 
-        labels = ["monitor", "keyboard", "mouse", "laptop", "bottle", "chair", "cup", "book"]
-        box_count = random.randint(1, 6)
-        boxes = []
-        counts = Counter()
-
-        for _ in range(box_count):
-            label = random.choice(labels)
-            conf = round(random.uniform(0.55, 0.98), 2)
-            x, y = random.randint(16, 540), random.randint(16, 300)
-            w, h = random.randint(40, 180), random.randint(40, 180)
-            boxes.append({"x": x, "y": y, "w": w, "h": h, "label": label, "conf": conf})
-            counts[label] += 1
-
-        return {"boxes": boxes, "counts": dict(counts)}
+        # 模型未加载成功时，不再返回随机演示框，避免误导业务判断。
+        return {"boxes": [], "counts": {}, "message": f"模型未加载：{self.model_name}"}
 
 
 model_service = YoloModelService()
