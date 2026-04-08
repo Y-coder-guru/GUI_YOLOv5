@@ -4,9 +4,9 @@ import base64
 import json
 import os
 import re
+import sqlite3
 
 import time
-import random
 import socket
 import urllib.request
 from collections import Counter
@@ -37,6 +37,7 @@ from flask_login import (
     logout_user,
 )
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.exc import DatabaseError
 from sqlalchemy import func, inspect, text
 from sqlalchemy.orm import Session
 
@@ -51,11 +52,24 @@ except ImportError:  # pragma: no cover
     list_ports = None
 
 try:
+    os.environ.setdefault("ULTRALYTICS_AUTOINSTALL", "0")
     from ultralytics import YOLO
 except ImportError:  # pragma: no cover
     YOLO = None
 
 try:
+    import torch
+except ImportError:  # pragma: no cover
+    torch = None
+
+try:
+
+    import yolov5
+except ImportError:  # pragma: no cover
+    yolov5 = None
+
+try:
+
     import cv2
 except ImportError:  # pragma: no cover
     cv2 = None
@@ -161,8 +175,10 @@ def load_user(user_id: str):
 class YoloModelService:
     """
     模型说明：
+
     1) 默认优先加载仓库根目录 `best.pt`（用户自训练权重）。
     2) 支持环境变量 YOLO_MODEL_PATH 指定权重路径（仅在 best.pt 不存在时生效）。
+
     3) 保持返回格式不变，前端与数据库将自动复用。
 
     返回格式:
@@ -176,6 +192,7 @@ class YoloModelService:
 
     def __init__(self):
         custom_path = os.getenv("YOLO_MODEL_PATH", "").strip()
+
         if (BASE_DIR / "best.pt").exists():
             self.model_path = BASE_DIR / "best.pt"
         elif custom_path:
@@ -184,20 +201,81 @@ class YoloModelService:
             self.model_path = BASE_DIR / "models" / "best.pt"
         else:
             self.model_path = BASE_DIR / "yolov5s.pt"
+
         self.model = None
+        self.backend = ""
         self.model_name = self.model_path.name
+        self.load_error = ""
+
+        self.model_mtime = 0.0
+        self.reload(force=True)
+
+    def _load_once(self) -> None:
+        if not YOLO:
+            self.load_error = "未安装 ultralytics，尝试 legacy 加载器"
+        if not self.model_path.exists():
+            self.model = None
+            self.backend = ""
+
+            self.model_name = f"{self.model_path.name} (missing)"
+            self.load_error = f"模型文件不存在: {self.model_path}"
+            return
+
+
+        self.model_mtime = self.model_path.stat().st_mtime
+
         if YOLO:
             try:
-                if self.model_path.exists():
-                    self.model = YOLO(str(self.model_path))
-                else:
-                    self.model = None
-                    self.model_name = f"{self.model_path.name} (missing, using demo mode)"
-            except Exception:
-                self.model = None
+                self.model = YOLO(str(self.model_path))
+                self.backend = "ultralytics"
+
+                self.load_error = ""
+                self.model_name = self.model_path.name
+
+                return
+            except Exception as exc:
+                self.load_error = f"ultralytics加载失败: {exc}"
+
+        # 兼容旧版 YOLOv5 训练权重（常见报错：requires 'models.yolo'）
+        if torch:
+            try:
+                self.model = torch.hub.load("ultralytics/yolov5", "custom", path=str(self.model_path), source="github")
+                self.model.conf = 0.25
+                self.backend = "torch_hub_yolov5"
+                self.load_error = ""
+
+                self.model_name = self.model_path.name
+                return
+            except Exception as exc:
+                self.load_error = f"legacy加载失败: {exc}"
+        if yolov5:
+            try:
+                self.model = yolov5.load(str(self.model_path))
+                self.backend = "yolov5_pkg"
+                self.load_error = ""
+                self.model_name = self.model_path.name
+                return
+            except Exception as exc:
+                self.load_error = f"yolov5包加载失败: {exc}"
+
+        self.model = None
+
+        self.backend = ""
+        self.model_name = f"{self.model_path.name} (load failed)"
+
+    def reload(self, force: bool = False) -> bool:
+        if not force and self.model_path.exists():
+            try:
+                if self.model and self.model_mtime == self.model_path.stat().st_mtime:
+                    return True
+            except OSError:
+                pass
+        self._load_once()
+        return bool(self.model)
+
 
     def predict_from_frame(self, frame_meta: dict | None = None) -> dict:
-        if self.model:
+        if self.model and self.backend == "ultralytics":
             source = frame_meta.get("frame_array") if frame_meta else None
             if source is None:
                 demo_img = BASE_DIR / "static" / "img" / "yolo_demo.jpg"
@@ -213,21 +291,56 @@ class YoloModelService:
                 boxes.append({"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1, "label": label, "conf": conf})
                 counts[label] += 1
             return {"boxes": boxes, "counts": dict(counts)}
+        if self.model and self.backend == "torch_hub_yolov5":
+            source = frame_meta.get("frame_array") if frame_meta else None
+            if source is None:
+                demo_img = BASE_DIR / "static" / "img" / "yolo_demo.jpg"
+                source = str(demo_img) if demo_img.exists() else "https://ultralytics.com/images/bus.jpg"
+            result = self.model(source)
+            boxes = []
+            counts = Counter()
+            arr = result.xyxy[0].cpu().numpy() if hasattr(result, "xyxy") else []
+            names = getattr(self.model, "names", {}) or {}
+            for row in arr:
+                x1, y1, x2, y2, conf, cls_id = row[:6]
+                cls_idx = int(cls_id)
+                label = names.get(cls_idx, str(cls_idx)) if isinstance(names, dict) else str(cls_idx)
+                conf = round(float(conf), 2)
+                boxes.append(
+                    {
+                        "x": int(x1),
+                        "y": int(y1),
+                        "w": max(0, int(x2 - x1)),
+                        "h": max(0, int(y2 - y1)),
+                        "label": label,
+                        "conf": conf,
+                    }
+                )
+                counts[label] += 1
+            return {"boxes": boxes, "counts": dict(counts)}
 
-        labels = ["monitor", "keyboard", "mouse", "laptop", "bottle", "chair", "cup", "book"]
-        box_count = random.randint(1, 6)
-        boxes = []
-        counts = Counter()
+        if self.model and self.backend == "yolov5_pkg":
+            source = frame_meta.get("frame_array") if frame_meta else None
+            if source is None:
+                demo_img = BASE_DIR / "static" / "img" / "yolo_demo.jpg"
+                source = str(demo_img) if demo_img.exists() else "https://ultralytics.com/images/bus.jpg"
+            result = self.model(source)
+            boxes = []
+            counts = Counter()
+            arr = result.xyxy[0].cpu().numpy() if hasattr(result, "xyxy") else []
+            names = getattr(self.model, "names", {}) or {}
+            for row in arr:
+                x1, y1, x2, y2, conf, cls_id = row[:6]
+                cls_idx = int(cls_id)
+                label = names.get(cls_idx, str(cls_idx)) if isinstance(names, dict) else str(cls_idx)
+                conf = round(float(conf), 2)
+                boxes.append({"x": int(x1), "y": int(y1), "w": max(0, int(x2 - x1)), "h": max(0, int(y2 - y1)), "label": label, "conf": conf})
+                counts[label] += 1
+            return {"boxes": boxes, "counts": dict(counts)}
 
-        for _ in range(box_count):
-            label = random.choice(labels)
-            conf = round(random.uniform(0.55, 0.98), 2)
-            x, y = random.randint(16, 540), random.randint(16, 300)
-            w, h = random.randint(40, 180), random.randint(40, 180)
-            boxes.append({"x": x, "y": y, "w": w, "h": h, "label": label, "conf": conf})
-            counts[label] += 1
+        # 模型未加载成功时，不再返回随机演示框，避免误导业务判断。
+        return {"boxes": [], "counts": {}, "message": f"模型未加载：{self.load_error or self.model_name}"}
 
-        return {"boxes": boxes, "counts": dict(counts)}
 
 
 model_service = YoloModelService()
@@ -299,6 +412,7 @@ def safe_fmt_dt(dt: datetime | None) -> str:
 
 
 def parse_client_datetime(value: str) -> datetime:
+
     dt = datetime.fromisoformat(value)
     return dt - timedelta(hours=8)
 
@@ -424,7 +538,8 @@ def get_today_detection_seconds() -> int:
 def init_db():
     if IS_SQLITE:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with app.app_context():
+    
+    def _init_db_once():
         db.create_all()
         inspector = inspect(db.engine)
 
@@ -485,6 +600,47 @@ def init_db():
             db.session.add(admin)
             db.session.commit()
             add_log("system", "初始化默认管理员账号：admin/admin123456")
+
+    with app.app_context():
+        try:
+            _init_db_once()
+        except (DatabaseError, sqlite3.DatabaseError) as exc:
+            # 仅在 SQLite 文件损坏时兜底恢复，避免影响其他数据库类型
+            err = str(exc).lower()
+            is_malformed = "database disk image is malformed" in err or "malformed" in err
+            if not (IS_SQLITE and is_malformed):
+                raise
+
+            auto_repair = os.getenv("SQLITE_AUTO_REPAIR", "1").strip().lower() in {"1", "true", "yes", "on"}
+            if not auto_repair:
+                app.logger.error(
+                    "检测到 SQLite 数据库损坏（%s），已按配置关闭自动重建。"
+
+                    "如需自动备份并重建，请设置环境变量 SQLITE_AUTO_REPAIR=1 后重启。",
+                    DB_PATH,
+                )
+                raise RuntimeError(
+
+                    "SQLite 数据库损坏，且当前配置已关闭自动重建。"
+                    "请先备份数据库并尝试修复，或设置 SQLITE_AUTO_REPAIR=1 再启动。"
+                ) from exc
+
+
+            db.session.remove()
+            db.engine.dispose()
+
+            broken_path = DB_PATH
+
+            backup_path = DB_PATH.with_name(f"{DB_PATH.stem}.corrupt.backup{DB_PATH.suffix}")
+
+            if broken_path.exists():
+                os.replace(broken_path, backup_path)
+            for sidecar in (f"{broken_path}-wal", f"{broken_path}-shm"):
+                if os.path.exists(sidecar):
+                    os.remove(sidecar)
+
+            app.logger.error("检测到 SQLite 数据库损坏，已备份为: %s，并自动重建新库。", backup_path)
+            _init_db_once()
 
 
 def get_lan_ip() -> str:
@@ -739,6 +895,7 @@ def camera_status():
 @app.get("/api/system/status")
 @login_required
 def system_status():
+    model_service.reload(force=False)
     sync_camera_state()
     camera_state = runtime_state["camera_state"] if runtime_state["camera_on"] else "未连接"
     return jsonify(
@@ -759,6 +916,9 @@ def system_status():
             "model_name": model_service.model_name,
             "model_path": str(model_service.model_path),
             "model_loaded": bool(model_service.model),
+            "model_backend": model_service.backend,
+            "model_error": model_service.load_error,
+
 
             "server_time": bjt_now().strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -896,6 +1056,7 @@ def update_openmv_settings():
 @app.post("/api/camera/start")
 @login_required
 def start_camera():
+    model_service.reload(force=False)
     payload = request.get_json(silent=True) or {}
     camera_type = payload.get("camera_type", "local")
     if camera_type == "openmv" and not runtime_state["openmv_connected"]:
@@ -903,13 +1064,22 @@ def start_camera():
 
     runtime_state["camera_type"] = camera_type
     runtime_state["camera_on"] = True
-    runtime_state["detection_on"] = True
+    runtime_state["detection_on"] = bool(model_service.model)
     runtime_state["camera_state"] = "已连接"
     if runtime_state["camera_started_at"] is None:
         runtime_state["camera_started_at"] = time.time()
 
-    add_log("device", f"摄像头已开启({camera_type})并自动开始检测", current_user.id)
-    return jsonify({"ok": True, "camera_on": True, "camera_type": camera_type, "detection_on": True})
+    action_desc = "并自动开始检测" if runtime_state["detection_on"] else "，但模型未加载，未开始检测"
+    add_log("device", f"摄像头已开启({camera_type}){action_desc}", current_user.id)
+    return jsonify(
+        {
+            "ok": True,
+            "camera_on": True,
+            "camera_type": camera_type,
+            "detection_on": runtime_state["detection_on"],
+            "message": "" if runtime_state["detection_on"] else (model_service.load_error or "模型未加载"),
+        }
+    )
 
 
 @app.post("/api/camera/stop")
@@ -933,8 +1103,11 @@ def stop_camera():
 @app.post("/api/detection/start")
 @login_required
 def start_detection():
+    model_service.reload(force=False)
     if not runtime_state["camera_on"]:
         return jsonify({"ok": False, "message": "请先打开摄像头"}), 400
+    if not model_service.model:
+        return jsonify({"ok": False, "message": model_service.load_error or "模型未加载"}), 400
 
     runtime_state["detection_on"] = True
     add_log("detection", "目标检测已开启", current_user.id)
@@ -952,11 +1125,15 @@ def stop_detection():
 @app.route("/api/detection/frame-data", methods=["GET", "POST"])
 @login_required
 def frame_data():
+    model_service.reload(force=False)
     if not runtime_state["camera_on"]:
         return jsonify({"ok": False, "message": "摄像头未开启", "boxes": [], "counts": {}})
 
     if not runtime_state["detection_on"]:
         return jsonify({"ok": True, "boxes": [], "counts": {}, "detection_on": False})
+    if not model_service.model:
+        runtime_state["detection_on"] = False
+        return jsonify({"ok": False, "message": model_service.load_error or "模型未加载", "boxes": [], "counts": {}, "detection_on": False}), 400
 
     payload = request.get_json(silent=True) or {}
     frame_meta = {"source": runtime_state["camera_type"], "openmv": openmv_settings}
@@ -976,7 +1153,7 @@ def frame_data():
     infer_start = time.perf_counter()
     result = model_service.predict_from_frame(frame_meta=frame_meta)
     runtime_state["last_inference_ms"] = round((time.perf_counter() - infer_start) * 1000, 2)
-    runtime_state["last_detection_time"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    runtime_state["last_detection_time"] = bjt_now().strftime("%Y-%m-%d %H:%M:%S")
 
     for category, count in result["counts"].items():
         avg_conf = sum(b["conf"] for b in result["boxes"] if b["label"] == category) / count
@@ -1098,7 +1275,7 @@ def advanced_stats():
             "bar": bar_data,
             "categories": sorted(list({r.category for r in scoped_detection_query().all()})),
             "total": total,
-            "range": {"start": start.isoformat(sep=" "), "end": end.isoformat(sep=" ")},
+            "range": {"start": safe_fmt_dt(start), "end": safe_fmt_dt(end)},
         }
     )
 
@@ -1246,7 +1423,10 @@ def admin_overview():
     log_query = SystemLog.query
     if operator_filter:
         log_query = log_query.filter(SystemLog.operator.contains(operator_filter))
+    total_logs = log_query.count()
     logs = log_query.order_by(SystemLog.created_at.desc()).offset(offset).limit(limit).all()
+    now_bjt = bjt_now()
+    today_start_utc = datetime(now_bjt.year, now_bjt.month, now_bjt.day) - timedelta(hours=8)
 
     return jsonify(
         {
@@ -1273,9 +1453,10 @@ def admin_overview():
                 "camera_state": runtime_state["camera_state"],
                 "detection_on": runtime_state["detection_on"],
                 "today_logs": db.session.query(func.count(SystemLog.id))
-                .filter(SystemLog.created_at >= datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0))
+                .filter(SystemLog.created_at >= today_start_utc)
                 .scalar(),
             },
+            "log_total": total_logs,
             "logs": [
                 {
                     "time": safe_fmt_dt(l.created_at),
