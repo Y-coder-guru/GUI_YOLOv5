@@ -52,9 +52,15 @@ except ImportError:  # pragma: no cover
     list_ports = None
 
 try:
+    os.environ.setdefault("ULTRALYTICS_AUTOINSTALL", "0")
     from ultralytics import YOLO
 except ImportError:  # pragma: no cover
     YOLO = None
+
+try:
+    import torch
+except ImportError:  # pragma: no cover
+    torch = None
 
 try:
     import cv2
@@ -187,29 +193,42 @@ class YoloModelService:
         self.model_path = next((p for p in preferred if p.exists()), BASE_DIR / "best.pt")
 
         self.model = None
+        self.backend = ""
         self.model_name = self.model_path.name
         self.load_error = ""
         if not YOLO:
-            self.load_error = "未安装 ultralytics，无法加载 YOLO 模型"
-            self.model_name = f"{self.model_path.name} (ultralytics missing)"
+
+            self.load_error = "未安装 ultralytics，尝试 legacy 加载器"
+        if not self.model_path.exists():
+            self.model_name = f"{self.model_path.name} (missing)"
+            self.load_error = f"模型文件不存在: {self.model_path}"
             return
+
         if YOLO:
             try:
-                if self.model_path.exists():
-                    self.model = YOLO(str(self.model_path))
-                else:
-                    self.model = None
-                    self.model_name = f"{self.model_path.name} (missing)"
+                self.model = YOLO(str(self.model_path))
+                self.backend = "ultralytics"
+                return
+            except Exception as exc:
+                self.load_error = f"ultralytics加载失败: {exc}"
 
-                    self.load_error = f"模型文件不存在: {self.model_path}"
-            except Exception:
-                self.model = None
-                self.model_name = f"{self.model_path.name} (load failed)"
-                self.load_error = f"模型加载失败: {self.model_path}"
+        # 兼容旧版 YOLOv5 训练权重（常见报错：requires 'models.yolo'）
+        if torch:
+            try:
+                self.model = torch.hub.load("ultralytics/yolov5", "custom", path=str(self.model_path), source="github")
+                self.model.conf = 0.25
+                self.backend = "torch_hub_yolov5"
+                self.load_error = ""
+                return
+            except Exception as exc:
+                self.load_error = f"legacy加载失败: {exc}"
+
+        self.model = None
+        self.model_name = f"{self.model_path.name} (load failed)"
 
 
     def predict_from_frame(self, frame_meta: dict | None = None) -> dict:
-        if self.model:
+        if self.model and self.backend == "ultralytics":
             source = frame_meta.get("frame_array") if frame_meta else None
             if source is None:
                 demo_img = BASE_DIR / "static" / "img" / "yolo_demo.jpg"
@@ -223,6 +242,33 @@ class YoloModelService:
                 conf = round(float(b.conf.item()), 2)
                 x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
                 boxes.append({"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1, "label": label, "conf": conf})
+                counts[label] += 1
+            return {"boxes": boxes, "counts": dict(counts)}
+        if self.model and self.backend == "torch_hub_yolov5":
+            source = frame_meta.get("frame_array") if frame_meta else None
+            if source is None:
+                demo_img = BASE_DIR / "static" / "img" / "yolo_demo.jpg"
+                source = str(demo_img) if demo_img.exists() else "https://ultralytics.com/images/bus.jpg"
+            result = self.model(source)
+            boxes = []
+            counts = Counter()
+            arr = result.xyxy[0].cpu().numpy() if hasattr(result, "xyxy") else []
+            names = getattr(self.model, "names", {}) or {}
+            for row in arr:
+                x1, y1, x2, y2, conf, cls_id = row[:6]
+                cls_idx = int(cls_id)
+                label = names.get(cls_idx, str(cls_idx)) if isinstance(names, dict) else str(cls_idx)
+                conf = round(float(conf), 2)
+                boxes.append(
+                    {
+                        "x": int(x1),
+                        "y": int(y1),
+                        "w": max(0, int(x2 - x1)),
+                        "h": max(0, int(y2 - y1)),
+                        "label": label,
+                        "conf": conf,
+                    }
+                )
                 counts[label] += 1
             return {"boxes": boxes, "counts": dict(counts)}
 
@@ -503,15 +549,17 @@ def init_db():
             if not (IS_SQLITE and is_malformed):
                 raise
 
-            auto_repair = os.getenv("SQLITE_AUTO_REPAIR", "0").strip().lower() in {"1", "true", "yes", "on"}
+            auto_repair = os.getenv("SQLITE_AUTO_REPAIR", "1").strip().lower() in {"1", "true", "yes", "on"}
             if not auto_repair:
                 app.logger.error(
-                    "检测到 SQLite 数据库损坏（%s），为避免数据丢失已停止自动重建。"
+                    "检测到 SQLite 数据库损坏（%s），已按配置关闭自动重建。"
+
                     "如需自动备份并重建，请设置环境变量 SQLITE_AUTO_REPAIR=1 后重启。",
                     DB_PATH,
                 )
                 raise RuntimeError(
-                    "SQLite 数据库损坏，已阻止自动重建以避免数据丢失。"
+
+                    "SQLite 数据库损坏，且当前配置已关闭自动重建。"
                     "请先备份数据库并尝试修复，或设置 SQLITE_AUTO_REPAIR=1 再启动。"
                 ) from exc
 
@@ -805,6 +853,9 @@ def system_status():
             "model_name": model_service.model_name,
             "model_path": str(model_service.model_path),
             "model_loaded": bool(model_service.model),
+
+            "model_backend": model_service.backend,
+
             "model_error": model_service.load_error,
 
             "server_time": bjt_now().strftime("%Y-%m-%d %H:%M:%S"),
