@@ -196,18 +196,32 @@ class YoloModelService:
         self.backend = ""
         self.model_name = self.model_path.name
         self.load_error = ""
-        if not YOLO:
 
+        self.model_mtime = 0.0
+        self.reload(force=True)
+
+    def _load_once(self) -> None:
+        if not YOLO:
             self.load_error = "未安装 ultralytics，尝试 legacy 加载器"
         if not self.model_path.exists():
+            self.model = None
+            self.backend = ""
+
             self.model_name = f"{self.model_path.name} (missing)"
             self.load_error = f"模型文件不存在: {self.model_path}"
             return
+
+
+        self.model_mtime = self.model_path.stat().st_mtime
 
         if YOLO:
             try:
                 self.model = YOLO(str(self.model_path))
                 self.backend = "ultralytics"
+
+                self.load_error = ""
+                self.model_name = self.model_path.name
+
                 return
             except Exception as exc:
                 self.load_error = f"ultralytics加载失败: {exc}"
@@ -219,12 +233,27 @@ class YoloModelService:
                 self.model.conf = 0.25
                 self.backend = "torch_hub_yolov5"
                 self.load_error = ""
+
+                self.model_name = self.model_path.name
+
                 return
             except Exception as exc:
                 self.load_error = f"legacy加载失败: {exc}"
 
         self.model = None
+
+        self.backend = ""
         self.model_name = f"{self.model_path.name} (load failed)"
+
+    def reload(self, force: bool = False) -> bool:
+        if not force and self.model_path.exists():
+            try:
+                if self.model and self.model_mtime == self.model_path.stat().st_mtime:
+                    return True
+            except OSError:
+                pass
+        self._load_once()
+        return bool(self.model)
 
 
     def predict_from_frame(self, frame_meta: dict | None = None) -> dict:
@@ -833,6 +862,7 @@ def camera_status():
 @app.get("/api/system/status")
 @login_required
 def system_status():
+    model_service.reload(force=False)
     sync_camera_state()
     camera_state = runtime_state["camera_state"] if runtime_state["camera_on"] else "未连接"
     return jsonify(
@@ -853,6 +883,8 @@ def system_status():
             "model_name": model_service.model_name,
             "model_path": str(model_service.model_path),
             "model_loaded": bool(model_service.model),
+            "model_backend": model_service.backend,
+            "model_error": model_service.load_error,
 
             "model_backend": model_service.backend,
 
@@ -994,6 +1026,7 @@ def update_openmv_settings():
 @app.post("/api/camera/start")
 @login_required
 def start_camera():
+    model_service.reload(force=False)
     payload = request.get_json(silent=True) or {}
     camera_type = payload.get("camera_type", "local")
     if camera_type == "openmv" and not runtime_state["openmv_connected"]:
@@ -1040,6 +1073,7 @@ def stop_camera():
 @app.post("/api/detection/start")
 @login_required
 def start_detection():
+    model_service.reload(force=False)
     if not runtime_state["camera_on"]:
         return jsonify({"ok": False, "message": "请先打开摄像头"}), 400
     if not model_service.model:
@@ -1061,6 +1095,7 @@ def stop_detection():
 @app.route("/api/detection/frame-data", methods=["GET", "POST"])
 @login_required
 def frame_data():
+    model_service.reload(force=False)
     if not runtime_state["camera_on"]:
         return jsonify({"ok": False, "message": "摄像头未开启", "boxes": [], "counts": {}})
 
