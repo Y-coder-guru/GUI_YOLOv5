@@ -148,6 +148,10 @@ async function refreshAdmin() {
 
   const prevUserPageBtn = document.getElementById('prevUserPage');
   const nextUserPageBtn = document.getElementById('nextUserPage');
+  const userTotalPages = Math.max(1, Math.ceil(allUsers.length / userPageSize));
+  const userCurrentPage = Math.floor(userOffset / userPageSize) + 1;
+  const userPageInfo = document.getElementById('userPageInfo');
+  if (userPageInfo) userPageInfo.textContent = `共 ${userTotalPages} 页，当前第 ${allUsers.length ? userCurrentPage : 0} 页`;
   if (prevUserPageBtn) prevUserPageBtn.disabled = userOffset <= 0;
   if (nextUserPageBtn) nextUserPageBtn.disabled = (userOffset + userPageSize) >= allUsers.length;
 
@@ -161,6 +165,11 @@ async function refreshAdmin() {
 
   document.getElementById('prevLogPage').disabled = logOffset <= 0;
   document.getElementById('nextLogPage').disabled = data.logs.length < logPageSize;
+  const totalLogs = Number(data.log_total || 0);
+  const logTotalPages = Math.max(1, Math.ceil(totalLogs / logPageSize));
+  const logCurrentPage = Math.floor(logOffset / logPageSize) + 1;
+  const logPageInfo = document.getElementById('logPageInfo');
+  if (logPageInfo) logPageInfo.textContent = `共 ${logTotalPages} 页，当前第 ${totalLogs ? logCurrentPage : 0} 页`;
 }
 
 document.getElementById('openCreateUser').onclick = async () => {
