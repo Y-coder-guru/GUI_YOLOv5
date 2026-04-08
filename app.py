@@ -161,7 +161,7 @@ def load_user(user_id: str):
 class YoloModelService:
     """
     模型说明：
-    1) 默认优先加载仓库根目录 `yolov5s.pt`。
+    1) 默认优先加载仓库根目录 `best.pt`。
     2) 支持环境变量 YOLO_MODEL_PATH 指定权重路径。
     3) 保持返回格式不变，前端与数据库将自动复用。
 
@@ -176,9 +176,11 @@ class YoloModelService:
 
     def __init__(self):
         custom_path = os.getenv("YOLO_MODEL_PATH", "").strip()
-        self.model_path = Path(custom_path) if custom_path else (BASE_DIR / "yolov5s.pt")
-        if not self.model_path.exists():
-            self.model_path = BASE_DIR / "models" / "best.pt"
+        if custom_path:
+            self.model_path = Path(custom_path)
+        else:
+            preferred = [BASE_DIR / "best.pt", BASE_DIR / "yolov5s.pt", BASE_DIR / "models" / "best.pt"]
+            self.model_path = next((p for p in preferred if p.exists()), preferred[0])
         self.model = None
         self.model_name = self.model_path.name
         if YOLO:
@@ -290,7 +292,16 @@ def clear_runtime_after_logout() -> None:
 def safe_fmt_dt(dt: datetime | None) -> str:
     if not dt:
         return "-"
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
+    return to_bjt(dt).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def parse_client_datetime(value: str) -> datetime:
+    """
+    前端时间控件传入的是本地时间（北京时间），数据库按 UTC 存储。
+    这里统一将前端时间转为 UTC。
+    """
+    dt = datetime.fromisoformat(value)
+    return dt - timedelta(hours=8)
 
 
 def is_camera_connected() -> bool:
@@ -490,28 +501,32 @@ init_db()
 
 
 def parse_time_range(range_key: str, start_time: str, end_time: str):
-    now = datetime.utcnow()
+    now_utc = datetime.utcnow()
+    now_bjt = to_bjt(now_utc)
+    today_start_bjt = datetime(now_bjt.year, now_bjt.month, now_bjt.day)
     if range_key == "today":
-        start = datetime(now.year, now.month, now.day)
-        end = now
+        start = today_start_bjt - timedelta(hours=8)
+        end = now_utc
     elif range_key == "yesterday":
-        start = datetime(now.year, now.month, now.day) - timedelta(days=1)
-        end = datetime(now.year, now.month, now.day) - timedelta(seconds=1)
+        yesterday_start_bjt = today_start_bjt - timedelta(days=1)
+        yesterday_end_bjt = today_start_bjt - timedelta(seconds=1)
+        start = yesterday_start_bjt - timedelta(hours=8)
+        end = yesterday_end_bjt - timedelta(hours=8)
     elif range_key == "7d":
-        start = now - timedelta(days=7)
-        end = now
+        start = now_utc - timedelta(days=7)
+        end = now_utc
     elif range_key == "30d":
-        start = now - timedelta(days=30)
-        end = now
+        start = now_utc - timedelta(days=30)
+        end = now_utc
     elif range_key == "custom":
         try:
-            start = datetime.fromisoformat(start_time)
-            end = datetime.fromisoformat(end_time)
+            start = parse_client_datetime(start_time)
+            end = parse_client_datetime(end_time)
         except (TypeError, ValueError):
             return None, None
     else:
-        start = now - timedelta(days=1)
-        end = now
+        start = now_utc - timedelta(days=1)
+        end = now_utc
     return start, end
 
 
@@ -962,7 +977,7 @@ def frame_data():
     infer_start = time.perf_counter()
     result = model_service.predict_from_frame(frame_meta=frame_meta)
     runtime_state["last_inference_ms"] = round((time.perf_counter() - infer_start) * 1000, 2)
-    runtime_state["last_detection_time"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    runtime_state["last_detection_time"] = bjt_now().strftime("%Y-%m-%d %H:%M:%S")
 
     for category, count in result["counts"].items():
         avg_conf = sum(b["conf"] for b in result["boxes"] if b["label"] == category) / count
@@ -985,7 +1000,8 @@ def frame_data():
 @login_required
 def live_stats():
     now = datetime.utcnow()
-    today_start = datetime(now.year, now.month, now.day)
+    now_bjt = to_bjt(now)
+    today_start = datetime(now_bjt.year, now_bjt.month, now_bjt.day) - timedelta(hours=8)
     today_records = scoped_detection_query().filter(DetectionRecord.detect_time >= today_start).all()
 
     total_events = len(today_records)
@@ -996,16 +1012,17 @@ def live_stats():
 
     hourly = [0] * 24
     for r in today_records:
-        hourly[r.detect_time.hour] += r.count
+        hourly[to_bjt(r.detect_time).hour] += r.count
 
     timeline_window_start = now - timedelta(minutes=1)
     recent_records = scoped_detection_query().filter(DetectionRecord.detect_time >= timeline_window_start).all()
     sec_bucket = Counter()
     for record in recent_records:
-        sec_bucket[record.detect_time.strftime("%H:%M:%S")] += record.count
+        sec_bucket[to_bjt(record.detect_time).strftime("%H:%M:%S")] += record.count
     timeline = []
+    now_bjt = to_bjt(now)
     for i in range(20):
-        t = now - timedelta(seconds=(19 - i) * 3)
+        t = now_bjt - timedelta(seconds=(19 - i) * 3)
         key = t.strftime("%H:%M:%S")
         timeline.append({"time": key, "value": sec_bucket.get(key, 0)})
 
@@ -1065,7 +1082,7 @@ def advanced_stats():
     grouped = Counter()
     for r in records:
         cate[r.category] += r.count
-        key = r.detect_time.strftime("%Y-%m-%d %H:%M")
+        key = to_bjt(r.detect_time).strftime("%Y-%m-%d %H:%M")
         grouped[key] += r.count
     for key in sorted(grouped.keys())[-100:]:
         timeline.append({"time": key, "value": grouped[key], "dist": dict(cate)})
@@ -1082,7 +1099,7 @@ def advanced_stats():
             "bar": bar_data,
             "categories": sorted(list({r.category for r in scoped_detection_query().all()})),
             "total": total,
-            "range": {"start": start.isoformat(sep=" "), "end": end.isoformat(sep=" ")},
+            "range": {"start": safe_fmt_dt(start), "end": safe_fmt_dt(end)},
         }
     )
 
@@ -1106,12 +1123,12 @@ def export_stats():
         query = query.filter(DetectionRecord.note.contains(note))
     if start_time:
         try:
-            query = query.filter(DetectionRecord.detect_time >= datetime.fromisoformat(start_time))
+            query = query.filter(DetectionRecord.detect_time >= parse_client_datetime(start_time))
         except ValueError:
             pass
     if end_time:
         try:
-            query = query.filter(DetectionRecord.detect_time <= datetime.fromisoformat(end_time))
+            query = query.filter(DetectionRecord.detect_time <= parse_client_datetime(end_time))
         except ValueError:
             pass
 
@@ -1119,7 +1136,7 @@ def export_stats():
     rows = [
         {
             "id": r.id,
-            "time": r.detect_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "time": safe_fmt_dt(r.detect_time),
             "category": r.category,
             "count": r.count,
             "confidence": r.confidence,
@@ -1185,12 +1202,12 @@ def get_history():
         query = query.filter(DetectionRecord.note.contains(note))
     if start_time:
         try:
-            query = query.filter(DetectionRecord.detect_time >= datetime.fromisoformat(start_time))
+            query = query.filter(DetectionRecord.detect_time >= parse_client_datetime(start_time))
         except ValueError:
             pass
     if end_time:
         try:
-            query = query.filter(DetectionRecord.detect_time <= datetime.fromisoformat(end_time))
+            query = query.filter(DetectionRecord.detect_time <= parse_client_datetime(end_time))
         except ValueError:
             pass
 
@@ -1205,7 +1222,7 @@ def get_history():
     data = [
         {
             "id": r.id,
-            "time": r.detect_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "time": safe_fmt_dt(r.detect_time),
             "category": r.category,
             "count": r.count,
             "confidence": r.confidence,
@@ -1230,7 +1247,10 @@ def admin_overview():
     log_query = SystemLog.query
     if operator_filter:
         log_query = log_query.filter(SystemLog.operator.contains(operator_filter))
+    total_logs = log_query.count()
     logs = log_query.order_by(SystemLog.created_at.desc()).offset(offset).limit(limit).all()
+    now_bjt = bjt_now()
+    today_start_utc = datetime(now_bjt.year, now_bjt.month, now_bjt.day) - timedelta(hours=8)
 
     return jsonify(
         {
@@ -1257,9 +1277,10 @@ def admin_overview():
                 "camera_state": runtime_state["camera_state"],
                 "detection_on": runtime_state["detection_on"],
                 "today_logs": db.session.query(func.count(SystemLog.id))
-                .filter(SystemLog.created_at >= datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0))
+                .filter(SystemLog.created_at >= today_start_utc)
                 .scalar(),
             },
+            "log_total": total_logs,
             "logs": [
                 {
                     "time": safe_fmt_dt(l.created_at),
@@ -1474,7 +1495,7 @@ def history_detail(record_id: int):
     r = DetectionRecord.query.get_or_404(record_id)
     if (not current_user.is_admin) and r.user_id != current_user.id:
         return jsonify({"ok": False, "message": "forbidden"}), 403
-    return jsonify({"ok": True, "record": {"id": r.id, "time": r.detect_time.strftime("%Y-%m-%d %H:%M:%S"), "category": r.category, "count": r.count, "confidence": r.confidence, "operator": r.operator_name, "operation_type": r.operation_type, "note": r.note}})
+    return jsonify({"ok": True, "record": {"id": r.id, "time": safe_fmt_dt(r.detect_time), "category": r.category, "count": r.count, "confidence": r.confidence, "operator": r.operator_name, "operation_type": r.operation_type, "note": r.note}})
 
 
 @app.get("/api/openmv/frame")
