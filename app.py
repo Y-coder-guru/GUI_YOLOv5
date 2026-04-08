@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import re
+import sqlite3
 
 import time
 import random
@@ -37,6 +38,7 @@ from flask_login import (
     logout_user,
 )
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.exc import DatabaseError
 from sqlalchemy import func, inspect, text
 from sqlalchemy.orm import Session
 
@@ -425,7 +427,8 @@ def get_today_detection_seconds() -> int:
 def init_db():
     if IS_SQLITE:
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with app.app_context():
+    
+    def _init_db_once():
         db.create_all()
         inspector = inspect(db.engine)
 
@@ -486,6 +489,32 @@ def init_db():
             db.session.add(admin)
             db.session.commit()
             add_log("system", "初始化默认管理员账号：admin/admin123456")
+
+    with app.app_context():
+        try:
+            _init_db_once()
+        except (DatabaseError, sqlite3.DatabaseError) as exc:
+            # 仅在 SQLite 文件损坏时兜底恢复，避免影响其他数据库类型
+            err = str(exc).lower()
+            is_malformed = "database disk image is malformed" in err or "malformed" in err
+            if not (IS_SQLITE and is_malformed):
+                raise
+
+            db.session.remove()
+            db.engine.dispose()
+
+            broken_path = DB_PATH
+            backup_path = DB_PATH.with_name(
+                f"{DB_PATH.stem}.corrupt.{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}{DB_PATH.suffix}"
+            )
+            if broken_path.exists():
+                os.replace(broken_path, backup_path)
+            for sidecar in (f"{broken_path}-wal", f"{broken_path}-shm"):
+                if os.path.exists(sidecar):
+                    os.remove(sidecar)
+
+            app.logger.error("检测到 SQLite 数据库损坏，已备份为: %s，并自动重建新库。", backup_path)
+            _init_db_once()
 
 
 def get_lan_ip() -> str:
