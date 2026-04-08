@@ -188,6 +188,11 @@ class YoloModelService:
 
         self.model = None
         self.model_name = self.model_path.name
+        self.load_error = ""
+        if not YOLO:
+            self.load_error = "未安装 ultralytics，无法加载 YOLO 模型"
+            self.model_name = f"{self.model_path.name} (ultralytics missing)"
+            return
         if YOLO:
             try:
                 if self.model_path.exists():
@@ -195,9 +200,13 @@ class YoloModelService:
                 else:
                     self.model = None
                     self.model_name = f"{self.model_path.name} (missing)"
+
+                    self.load_error = f"模型文件不存在: {self.model_path}"
             except Exception:
                 self.model = None
                 self.model_name = f"{self.model_path.name} (load failed)"
+                self.load_error = f"模型加载失败: {self.model_path}"
+
 
     def predict_from_frame(self, frame_meta: dict | None = None) -> dict:
         if self.model:
@@ -218,7 +227,9 @@ class YoloModelService:
             return {"boxes": boxes, "counts": dict(counts)}
 
         # 模型未加载成功时，不再返回随机演示框，避免误导业务判断。
-        return {"boxes": [], "counts": {}, "message": f"模型未加载：{self.model_name}"}
+
+        return {"boxes": [], "counts": {}, "message": f"模型未加载：{self.load_error or self.model_name}"}
+
 
 
 model_service = YoloModelService()
@@ -491,6 +502,19 @@ def init_db():
             is_malformed = "database disk image is malformed" in err or "malformed" in err
             if not (IS_SQLITE and is_malformed):
                 raise
+
+            auto_repair = os.getenv("SQLITE_AUTO_REPAIR", "0").strip().lower() in {"1", "true", "yes", "on"}
+            if not auto_repair:
+                app.logger.error(
+                    "检测到 SQLite 数据库损坏（%s），为避免数据丢失已停止自动重建。"
+                    "如需自动备份并重建，请设置环境变量 SQLITE_AUTO_REPAIR=1 后重启。",
+                    DB_PATH,
+                )
+                raise RuntimeError(
+                    "SQLite 数据库损坏，已阻止自动重建以避免数据丢失。"
+                    "请先备份数据库并尝试修复，或设置 SQLITE_AUTO_REPAIR=1 再启动。"
+                ) from exc
+
 
             db.session.remove()
             db.engine.dispose()
@@ -781,6 +805,7 @@ def system_status():
             "model_name": model_service.model_name,
             "model_path": str(model_service.model_path),
             "model_loaded": bool(model_service.model),
+            "model_error": model_service.load_error,
 
             "server_time": bjt_now().strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -925,13 +950,22 @@ def start_camera():
 
     runtime_state["camera_type"] = camera_type
     runtime_state["camera_on"] = True
-    runtime_state["detection_on"] = True
+    runtime_state["detection_on"] = bool(model_service.model)
     runtime_state["camera_state"] = "已连接"
     if runtime_state["camera_started_at"] is None:
         runtime_state["camera_started_at"] = time.time()
 
-    add_log("device", f"摄像头已开启({camera_type})并自动开始检测", current_user.id)
-    return jsonify({"ok": True, "camera_on": True, "camera_type": camera_type, "detection_on": True})
+    action_desc = "并自动开始检测" if runtime_state["detection_on"] else "，但模型未加载，未开始检测"
+    add_log("device", f"摄像头已开启({camera_type}){action_desc}", current_user.id)
+    return jsonify(
+        {
+            "ok": True,
+            "camera_on": True,
+            "camera_type": camera_type,
+            "detection_on": runtime_state["detection_on"],
+            "message": "" if runtime_state["detection_on"] else (model_service.load_error or "模型未加载"),
+        }
+    )
 
 
 @app.post("/api/camera/stop")
@@ -957,6 +991,8 @@ def stop_camera():
 def start_detection():
     if not runtime_state["camera_on"]:
         return jsonify({"ok": False, "message": "请先打开摄像头"}), 400
+    if not model_service.model:
+        return jsonify({"ok": False, "message": model_service.load_error or "模型未加载"}), 400
 
     runtime_state["detection_on"] = True
     add_log("detection", "目标检测已开启", current_user.id)
@@ -979,6 +1015,9 @@ def frame_data():
 
     if not runtime_state["detection_on"]:
         return jsonify({"ok": True, "boxes": [], "counts": {}, "detection_on": False})
+    if not model_service.model:
+        runtime_state["detection_on"] = False
+        return jsonify({"ok": False, "message": model_service.load_error or "模型未加载", "boxes": [], "counts": {}, "detection_on": False}), 400
 
     payload = request.get_json(silent=True) or {}
     frame_meta = {"source": runtime_state["camera_type"], "openmv": openmv_settings}
