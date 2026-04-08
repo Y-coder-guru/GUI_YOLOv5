@@ -325,7 +325,10 @@ document.getElementById('openCameraBtn').onclick = async () => {
     return;
   }
   ensureDetectionPolling(!!resp.detection_on);
-  showToast(resp.detection_on ? '摄像头已开启，检测已自动开始' : '摄像头已开启');
+  showToast(
+    resp.detection_on ? '摄像头已开启，检测已自动开始' : (resp.message || '摄像头已开启，但模型未加载'),
+    resp.detection_on ? 'success' : 'warning',
+  );
   await refreshSystem();
 };
 
