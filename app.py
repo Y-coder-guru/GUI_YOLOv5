@@ -6,7 +6,6 @@ import os
 import re
 
 import time
-import random
 import socket
 import urllib.request
 from collections import Counter
@@ -58,6 +57,10 @@ try:
     import cv2
 except ImportError:  # pragma: no cover
     cv2 = None
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover
+    Image = None
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "instance" / "yolo_monitor.db"
@@ -179,12 +182,14 @@ class YoloModelService:
         self.model = None
         self.model_name = self.model_path.name
         self.last_error = ""
+        self.last_reload_attempt_ts = 0.0
         self.reload()
 
     def reload(self) -> tuple[bool, str]:
         self.model = None
         self.model_name = self.model_path.name
         self.last_error = ""
+        self.last_reload_attempt_ts = time.time()
         if not YOLO:
             self.last_error = "未安装 ultralytics，当前为演示模式"
             return False, self.last_error
@@ -199,12 +204,20 @@ class YoloModelService:
             self.last_error = f"模型加载失败：{exc}"
             return False, self.last_error
 
+    def ensure_loaded(self, cooldown_sec: float = 5.0) -> bool:
+        if self.model is not None:
+            return True
+        now = time.time()
+        if now - self.last_reload_attempt_ts < cooldown_sec:
+            return False
+        ok, _ = self.reload()
+        return ok
+
     def predict_from_frame(self, frame_meta: dict | None = None) -> dict:
         if self.model:
             source = frame_meta.get("frame_array") if frame_meta else None
             if source is None:
-                demo_img = BASE_DIR / "static" / "img" / "yolo_demo.jpg"
-                source = str(demo_img) if demo_img.exists() else "https://ultralytics.com/images/bus.jpg"
+                return {"boxes": [], "counts": {}, "warning": "未收到可用视频帧，无法进行推理"}
             result = self.model.predict(source=source, verbose=False)[0]
             boxes = []
             counts = Counter()
@@ -216,21 +229,7 @@ class YoloModelService:
                 boxes.append({"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1, "label": label, "conf": conf})
                 counts[label] += 1
             return {"boxes": boxes, "counts": dict(counts)}
-
-        labels = ["monitor", "keyboard", "mouse", "laptop", "bottle", "chair", "cup", "book"]
-        box_count = random.randint(1, 6)
-        boxes = []
-        counts = Counter()
-
-        for _ in range(box_count):
-            label = random.choice(labels)
-            conf = round(random.uniform(0.55, 0.98), 2)
-            x, y = random.randint(16, 540), random.randint(16, 300)
-            w, h = random.randint(40, 180), random.randint(40, 180)
-            boxes.append({"x": x, "y": y, "w": w, "h": h, "label": label, "conf": conf})
-            counts[label] += 1
-
-        return {"boxes": boxes, "counts": dict(counts)}
+        return {"boxes": [], "counts": {}, "warning": self.last_error or "模型未加载，无法推理"}
 
 
 model_service = YoloModelService()
@@ -733,6 +732,7 @@ def camera_status():
 @app.get("/api/system/status")
 @login_required
 def system_status():
+    model_service.ensure_loaded(cooldown_sec=3.0)
     sync_camera_state()
     camera_state = runtime_state["camera_state"] if runtime_state["camera_on"] else "未连接"
     return jsonify(
@@ -914,6 +914,7 @@ def start_camera():
         return jsonify({"ok": False, "message": "OpenMV 未连接，请先连接设备"}), 400
 
     runtime_state["camera_type"] = camera_type
+    model_service.ensure_loaded(cooldown_sec=0.0)
     runtime_state["camera_on"] = True
     runtime_state["detection_on"] = True
     runtime_state["camera_state"] = "已连接"
@@ -921,7 +922,16 @@ def start_camera():
         runtime_state["camera_started_at"] = time.time()
 
     add_log("device", f"摄像头已开启({camera_type})并自动开始检测", current_user.id)
-    return jsonify({"ok": True, "camera_on": True, "camera_type": camera_type, "detection_on": True})
+    return jsonify(
+        {
+            "ok": True,
+            "camera_on": True,
+            "camera_type": camera_type,
+            "detection_on": True,
+            "model_loaded": bool(model_service.model),
+            "model_error": model_service.last_error,
+        }
+    )
 
 
 @app.post("/api/camera/stop")
@@ -969,10 +979,21 @@ def frame_data():
 
     if not runtime_state["detection_on"]:
         return jsonify({"ok": True, "boxes": [], "counts": {}, "detection_on": False})
+    model_service.ensure_loaded(cooldown_sec=0.0)
+    if not model_service.model:
+        return jsonify(
+            {
+                "ok": False,
+                "message": model_service.last_error or "模型未加载，无法推理",
+                "boxes": [],
+                "counts": {},
+            }
+        )
 
     payload = request.get_json(silent=True) or {}
     frame_meta = {"source": runtime_state["camera_type"], "openmv": openmv_settings}
     frame_b64 = (payload.get("frame") or "").strip()
+    frame_provided = bool(frame_b64)
     if frame_b64:
         if "," in frame_b64:
             frame_b64 = frame_b64.split(",", 1)[1]
@@ -985,6 +1006,21 @@ def frame_data():
                     frame_meta["frame_array"] = frame
         except Exception:
             pass
+    if frame_provided and "frame_array" not in frame_meta:
+        try:
+            raw = base64.b64decode(frame_b64)
+            if Image is not None:
+                from io import BytesIO
+
+                frame = np.array(Image.open(BytesIO(raw)).convert("RGB"))
+                if frame is not None and frame.size > 0:
+                    frame_meta["frame_array"] = frame
+        except Exception:
+            pass
+
+    if frame_provided and "frame_array" not in frame_meta:
+        return jsonify({"ok": False, "message": "摄像头帧解析失败，请检查图像编码格式", "boxes": [], "counts": {}})
+
     infer_start = time.perf_counter()
     result = model_service.predict_from_frame(frame_meta=frame_meta)
     runtime_state["last_inference_ms"] = round((time.perf_counter() - infer_start) * 1000, 2)
