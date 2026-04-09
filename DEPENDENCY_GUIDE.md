@@ -1,29 +1,54 @@
 # 依赖安装说明（GUI_YOLOv5）
 
-我已经把你现有的两个依赖来源做了整理：
 
-1. `requirements.txt`：用于当前项目的**推荐安装清单**（已合并 Web + YOLOv5 核心依赖）。
-2. `requirements_zhihuis_pip.txt`：由 `zhihuis.txt` 自动转换出的 **完整 pip 版本清单**（尽量保留原环境版本）。
+你反馈的报错是对的：之前那版依赖里把 `opencv-python==4.12.0.88` 和 `scipy==1.10.1` 固定在一起，
+在 Python 3.9/3.10 下会被 `numpy` 版本约束卡住（`opencv 4.12` 倾向 `numpy>=2`，而 `scipy 1.10` 要 `numpy<1.27`）。
 
-## 你现在应该怎么装
+我已经修正为“可解依赖”的版本范围：
 
-### 方案 A（推荐，先跑起来）
+- `numpy>=1.23.5,<1.27`
+- `opencv-python>=4.8,<4.11`
+- `scipy>=1.10,<1.12`
+
+这样可以避免你截图里的 `ResolutionImpossible`。
+
+---
+
+## 文件说明
+
+1. `requirements.txt`：现在是**可安装优先**的推荐清单（已修复版本冲突）。
+2. `requirements_zhihuis_pip.txt`：由 `zhihuis.txt` 转出的完整 pip 清单（更像“历史环境快照”）。
+
+## 安装建议（Anaconda 里执行）
+
+### 1) 新建并激活环境（推荐 Python 3.10）
+```bash
+conda create -n py310_yolov5 python=3.10 -y
+conda activate py310_yolov5
+python -m pip install -U pip setuptools wheel
+```
+
+### 2) 安装项目依赖（推荐）
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 方案 B（尽量贴近学姐环境）
+
+### 3) 如果你要尽量贴近学姐原环境
+
 ```bash
 pip install -r requirements_zhihuis_pip.txt
 ```
 
-## 关于你提到的 YOLOv8 / alltrack
 
-- 你这个仓库是 YOLOv5 项目，运行和训练 YOLOv5 **不需要** YOLOv8 的 `alltrack` 那个 txt。
-- 所以你删掉 YOLOv8 的依赖文件，一般不影响这个仓库。
+## 关于你说的 YOLOv8 / alltrack
 
-## 注意事项
+- 这个仓库是 YOLOv5，通常不需要 YOLOv8 的 `alltrack` 依赖文件。
+- 你删掉那个 txt，一般不影响这个项目。
 
-- `zhihuis.txt` 是 Conda 导出的环境文件，里面很多是底层系统包，不能直接用于 `pip install -r`。
-- 我已经把可 pip 安装的包转成了 `requirements_zhihuis_pip.txt`。
-- 如果你在 Windows 或 Linux 上安装，像 `appnope` 这类 macOS 专用包可以忽略（报错就删掉该行重装）。
+## 如果仍报错
+
+先看是不是你本地还额外指定了 `numpy==2.1.2`（截图里就是这个触发冲突），
+如果有，请从你本地 requirements 或安装命令里删掉这个固定版本再装。
+
