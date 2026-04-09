@@ -44,7 +44,6 @@ try:
     import serial
 except ImportError:  # pragma: no cover
     serial = None
-
 try:
     from serial.tools import list_ports
 except ImportError:  # pragma: no cover
