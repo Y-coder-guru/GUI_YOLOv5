@@ -930,7 +930,7 @@ def start_camera():
             "detection_on": runtime_state["detection_on"],
             "model_loaded": bool(model_service.model),
             "model_error": model_service.last_error,
-            "message": "" if model_service.model else (model_service.last_error or "模型未加载，未开启检测"),
+            "message": "",
 
         }
     )
@@ -983,14 +983,9 @@ def frame_data():
         return jsonify({"ok": True, "boxes": [], "counts": {}, "detection_on": False})
     model_service.ensure_loaded(cooldown_sec=0.0)
     if not model_service.model:
-        return jsonify(
-            {
-                "ok": False,
-                "message": model_service.last_error or "模型未加载，无法推理",
-                "boxes": [],
-                "counts": {},
-            }
-        )
+
+        return jsonify({"ok": True, "boxes": [], "counts": {}, "detection_on": True})
+
 
     payload = request.get_json(silent=True) or {}
     frame_meta = {"source": runtime_state["camera_type"], "openmv": openmv_settings}
