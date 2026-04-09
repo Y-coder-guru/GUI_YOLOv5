@@ -19,7 +19,7 @@ GUI_YOLOv5/
 ├── instance/
 │   └── yolo_monitor.db            # 自动创建
 ├── models/
-│   └── best.pt                    # 你训练好的模型放这里（手动创建）
+│   └── best.pt                    # 默认加载的模型文件
 ├── static/
 │   ├── css/style.css
 │   └── js/
@@ -58,7 +58,7 @@ python app.py
 你只需要改一个地方：`app.py` 里的 `YoloModelService.predict_from_frame()`。
 
 ### 建议步骤
-1. 把训练好的模型放到：`models/best.pt`
+1. 把训练好的模型放到项目根目录：`best.pt`
 2. 在 `predict_from_frame()` 里加载你自己的 YOLO 模型
 3. 输出格式保持不变：
 ```python

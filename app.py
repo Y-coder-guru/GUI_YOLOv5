@@ -160,7 +160,7 @@ def load_user(user_id: str):
 class YoloModelService:
     """
     模型说明：
-    1) 默认优先加载仓库根目录 `yolov5s.pt`。
+    1) 默认加载仓库根目录 `best.pt`。
     2) 支持环境变量 YOLO_MODEL_PATH 指定权重路径。
     3) 保持返回格式不变，前端与数据库将自动复用。
 
@@ -175,20 +175,29 @@ class YoloModelService:
 
     def __init__(self):
         custom_path = os.getenv("YOLO_MODEL_PATH", "").strip()
-        self.model_path = Path(custom_path) if custom_path else (BASE_DIR / "yolov5s.pt")
-        if not self.model_path.exists():
-            self.model_path = BASE_DIR / "models" / "best.pt"
+        self.model_path = Path(custom_path) if custom_path else (BASE_DIR / "best.pt")
         self.model = None
         self.model_name = self.model_path.name
-        if YOLO:
-            try:
-                if self.model_path.exists():
-                    self.model = YOLO(str(self.model_path))
-                else:
-                    self.model = None
-                    self.model_name = f"{self.model_path.name} (missing, using demo mode)"
-            except Exception:
-                self.model = None
+        self.last_error = ""
+        self.reload()
+
+    def reload(self) -> tuple[bool, str]:
+        self.model = None
+        self.model_name = self.model_path.name
+        self.last_error = ""
+        if not YOLO:
+            self.last_error = "未安装 ultralytics，当前为演示模式"
+            return False, self.last_error
+        if not self.model_path.exists():
+            self.last_error = f"模型文件不存在：{self.model_path.name}"
+            self.model_name = f"{self.model_path.name} (missing, using demo mode)"
+            return False, self.last_error
+        try:
+            self.model = YOLO(str(self.model_path))
+            return True, f"模型已加载：{self.model_path.name}"
+        except Exception as exc:
+            self.last_error = f"模型加载失败：{exc}"
+            return False, self.last_error
 
     def predict_from_frame(self, frame_meta: dict | None = None) -> dict:
         if self.model:
@@ -744,10 +753,28 @@ def system_status():
             "model_name": model_service.model_name,
             "model_path": str(model_service.model_path),
             "model_loaded": bool(model_service.model),
+            "model_error": model_service.last_error,
 
             "server_time": bjt_now().strftime("%Y-%m-%d %H:%M:%S"),
         }
     )
+
+
+@app.post("/api/model/reload")
+@login_required
+def reload_model():
+    ok, message = model_service.reload()
+    code = 200 if ok else 400
+    return jsonify(
+        {
+            "ok": ok,
+            "message": message,
+            "model_name": model_service.model_name,
+            "model_path": str(model_service.model_path),
+            "model_loaded": bool(model_service.model),
+            "model_error": model_service.last_error,
+        }
+    ), code
 
 
 @app.get("/api/openmv/ports")
