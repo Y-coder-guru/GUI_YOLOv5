@@ -352,6 +352,8 @@ document.getElementById('startDetBtn').onclick = async () => {
 document.getElementById('stopDetBtn').onclick = async () => {
   await postApi('/api/detection/stop');
   ensureDetectionPolling(false);
+  drawBoxes([]);
+  renderCounts({});
   statusText.textContent = '状态：检测已停止（画面保留）';
   showToast('已停止检测，画面保留但不再框选目标', 'secondary');
 };

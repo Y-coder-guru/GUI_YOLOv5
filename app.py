@@ -160,7 +160,7 @@ def load_user(user_id: str):
 class YoloModelService:
     """
     模型说明：
-    1) 默认优先加载仓库根目录 `yolov5s.pt`。
+    1) 默认优先加载仓库根目录 `best.pt`（自训练权重）。
     2) 支持环境变量 YOLO_MODEL_PATH 指定权重路径。
     3) 保持返回格式不变，前端与数据库将自动复用。
 
@@ -175,7 +175,7 @@ class YoloModelService:
 
     def __init__(self):
         custom_path = os.getenv("YOLO_MODEL_PATH", "").strip()
-        self.model_path = Path(custom_path) if custom_path else (BASE_DIR / "yolov5s.pt")
+        self.model_path = Path(custom_path) if custom_path else (BASE_DIR / "best.pt")
         if not self.model_path.exists():
             self.model_path = BASE_DIR / "models" / "best.pt"
         self.model = None
