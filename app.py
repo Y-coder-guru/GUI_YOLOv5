@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 
@@ -174,12 +175,15 @@ class YoloModelService:
     """
 
     def __init__(self):
+        # 防止 Ultralytics 在解析旧权重依赖时自动执行 `pip install`（例如误把 `models.yolo` 当成 pip 包）。
+        os.environ.setdefault("YOLO_AUTOINSTALL", "False")
         custom_path = os.getenv("YOLO_MODEL_PATH", "").strip()
         self.model_path = Path(custom_path) if custom_path else (BASE_DIR / "best.pt")
         if not self.model_path.exists():
             self.model_path = BASE_DIR / "models" / "best.pt"
         self.model = None
         self.model_name = self.model_path.name
+        self.load_error = ""
         if YOLO:
             try:
                 if self.model_path.exists():
@@ -187,8 +191,20 @@ class YoloModelService:
                 else:
                     self.model = None
                     self.model_name = f"{self.model_path.name} (missing, using demo mode)"
-            except Exception:
+            except Exception as exc:
+                self.load_error = str(exc)
                 self.model = None
+                fallback_model = os.getenv("YOLO_FALLBACK_MODEL", "yolo11n.pt").strip()
+                try:
+                    self.model = YOLO(fallback_model)
+                    self.model_name = f"{fallback_model} (fallback: incompatible custom model)"
+                except Exception:
+                    self.model_name = f"{self.model_path.name} (load failed, using demo mode)"
+                logging.warning(
+                    "Failed to load custom YOLO model '%s': %s",
+                    self.model_path,
+                    self.load_error,
+                )
 
     def predict_from_frame(self, frame_meta: dict | None = None) -> dict:
         if self.model:
@@ -744,6 +760,7 @@ def system_status():
             "model_name": model_service.model_name,
             "model_path": str(model_service.model_path),
             "model_loaded": bool(model_service.model),
+            "model_load_error": model_service.load_error,
 
             "server_time": bjt_now().strftime("%Y-%m-%d %H:%M:%S"),
         }
