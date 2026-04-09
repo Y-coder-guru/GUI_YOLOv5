@@ -131,8 +131,10 @@ async function refreshSystem() {
   statusText.textContent = `状态：${data.detection_on ? '运行中' : (data.camera_on ? '摄像头已开启' : '待机')}`;
   cameraMeta.textContent = `类型：${data.camera_type || '-'} | 分辨率：${data.openmv_settings?.resolution || '-'} | 帧率：${data.openmv_settings?.fps || '-'}fps`;
   perfMeta.textContent = `推理耗时：${data.last_inference_ms || '-'}ms`;
+
   const reason = !data.model_loaded && data.model_error ? `：${data.model_error}` : '';
   modelMeta.textContent = `模型：${data.model_name || '-'}（${data.model_loaded ? '已加载' : `未加载${reason}` }）`;
+
 
   const cfg = data.openmv_settings || {};
   if (shouldSyncConfig) patchConfigInputs(cfg);
