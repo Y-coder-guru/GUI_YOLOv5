@@ -6,7 +6,6 @@ import os
 import re
 
 import time
-import random
 import socket
 import urllib.request
 from collections import Counter
@@ -203,8 +202,7 @@ class YoloModelService:
         if self.model:
             source = frame_meta.get("frame_array") if frame_meta else None
             if source is None:
-                demo_img = BASE_DIR / "static" / "img" / "yolo_demo.jpg"
-                source = str(demo_img) if demo_img.exists() else "https://ultralytics.com/images/bus.jpg"
+                return {"boxes": [], "counts": {}, "warning": "未收到可用视频帧，无法进行推理"}
             result = self.model.predict(source=source, verbose=False)[0]
             boxes = []
             counts = Counter()
@@ -216,21 +214,7 @@ class YoloModelService:
                 boxes.append({"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1, "label": label, "conf": conf})
                 counts[label] += 1
             return {"boxes": boxes, "counts": dict(counts)}
-
-        labels = ["monitor", "keyboard", "mouse", "laptop", "bottle", "chair", "cup", "book"]
-        box_count = random.randint(1, 6)
-        boxes = []
-        counts = Counter()
-
-        for _ in range(box_count):
-            label = random.choice(labels)
-            conf = round(random.uniform(0.55, 0.98), 2)
-            x, y = random.randint(16, 540), random.randint(16, 300)
-            w, h = random.randint(40, 180), random.randint(40, 180)
-            boxes.append({"x": x, "y": y, "w": w, "h": h, "label": label, "conf": conf})
-            counts[label] += 1
-
-        return {"boxes": boxes, "counts": dict(counts)}
+        return {"boxes": [], "counts": {}, "warning": self.last_error or "模型未加载，无法推理"}
 
 
 model_service = YoloModelService()
@@ -973,6 +957,7 @@ def frame_data():
     payload = request.get_json(silent=True) or {}
     frame_meta = {"source": runtime_state["camera_type"], "openmv": openmv_settings}
     frame_b64 = (payload.get("frame") or "").strip()
+    frame_provided = bool(frame_b64)
     if frame_b64:
         if "," in frame_b64:
             frame_b64 = frame_b64.split(",", 1)[1]
@@ -985,6 +970,11 @@ def frame_data():
                     frame_meta["frame_array"] = frame
         except Exception:
             pass
+    if frame_provided and "frame_array" not in frame_meta:
+        if cv2 is None:
+            return jsonify({"ok": False, "message": "服务器缺少 opencv-python，无法解析摄像头帧", "boxes": [], "counts": {}})
+        return jsonify({"ok": False, "message": "摄像头帧解析失败，请检查图像编码格式", "boxes": [], "counts": {}})
+
     infer_start = time.perf_counter()
     result = model_service.predict_from_frame(frame_meta=frame_meta)
     runtime_state["last_inference_ms"] = round((time.perf_counter() - infer_start) * 1000, 2)

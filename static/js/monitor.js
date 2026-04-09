@@ -7,8 +7,6 @@ const statusText = document.getElementById('statusText');
 const cameraMeta = document.getElementById('cameraMeta');
 const perfMeta = document.getElementById('perfMeta');
 const modelMeta = document.getElementById('modelMeta');
-const modelLoadState = document.getElementById('modelLoadState');
-const reloadModelBtn = document.getElementById('reloadModelBtn');
 const cameraType = document.getElementById('cameraType');
 const openmvPanel = document.getElementById('openmvPanel');
 const openmvConnStatus = document.getElementById('openmvConnStatus');
@@ -127,13 +125,7 @@ async function refreshSystem() {
   statusText.textContent = `状态：${data.detection_on ? '运行中' : (data.camera_on ? '摄像头已开启' : '待机')}`;
   cameraMeta.textContent = `类型：${data.camera_type || '-'} | 分辨率：${data.openmv_settings?.resolution || '-'} | 帧率：${data.openmv_settings?.fps || '-'}fps`;
   perfMeta.textContent = `推理耗时：${data.last_inference_ms || '-'}ms`;
-  modelMeta.textContent = `模型：${data.model_name || '-'} | ${data.model_loaded ? '已加载' : '未加载'}`;
-  modelLoadState.textContent = data.model_loaded
-    ? '模型状态：已加载'
-    : `模型状态：未加载${data.model_error ? `（${data.model_error}）` : ''}`;
-  reloadModelBtn.classList.toggle('btn-outline-primary', !data.model_loaded);
-  reloadModelBtn.classList.toggle('btn-outline-success', !!data.model_loaded);
-  reloadModelBtn.textContent = data.model_loaded ? '重新加载模型（当前可用）' : '重新加载模型（当前不可用）';
+  modelMeta.textContent = `模型：${data.model_name || '-'}（${data.model_loaded ? '已加载' : '未加载'}）`;
 
   const cfg = data.openmv_settings || {};
   if (shouldSyncConfig) patchConfigInputs(cfg);
@@ -355,18 +347,6 @@ document.getElementById('startDetBtn').onclick = async () => {
   }
   ensureDetectionPolling(true);
   statusText.textContent = '状态：运行中';
-};
-
-reloadModelBtn.onclick = async () => {
-  reloadModelBtn.disabled = true;
-  const data = await postApi('/api/model/reload');
-  if (data.ok) {
-    showToast(`模型加载成功：${data.model_name}`, 'success');
-  } else {
-    showToast(data.message || '模型加载失败', 'warning');
-  }
-  reloadModelBtn.disabled = false;
-  await refreshSystem();
 };
 
 document.getElementById('stopDetBtn').onclick = async () => {
