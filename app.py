@@ -178,12 +178,14 @@ class YoloModelService:
         self.model = None
         self.model_name = self.model_path.name
         self.last_error = ""
+        self.last_reload_attempt_ts = 0.0
         self.reload()
 
     def reload(self) -> tuple[bool, str]:
         self.model = None
         self.model_name = self.model_path.name
         self.last_error = ""
+        self.last_reload_attempt_ts = time.time()
         if not YOLO:
             self.last_error = "未安装 ultralytics，当前为演示模式"
             return False, self.last_error
@@ -197,6 +199,15 @@ class YoloModelService:
         except Exception as exc:
             self.last_error = f"模型加载失败：{exc}"
             return False, self.last_error
+
+    def ensure_loaded(self, cooldown_sec: float = 5.0) -> bool:
+        if self.model is not None:
+            return True
+        now = time.time()
+        if now - self.last_reload_attempt_ts < cooldown_sec:
+            return False
+        ok, _ = self.reload()
+        return ok
 
     def predict_from_frame(self, frame_meta: dict | None = None) -> dict:
         if self.model:
@@ -717,6 +728,7 @@ def camera_status():
 @app.get("/api/system/status")
 @login_required
 def system_status():
+    model_service.ensure_loaded(cooldown_sec=3.0)
     sync_camera_state()
     camera_state = runtime_state["camera_state"] if runtime_state["camera_on"] else "未连接"
     return jsonify(
@@ -898,6 +910,7 @@ def start_camera():
         return jsonify({"ok": False, "message": "OpenMV 未连接，请先连接设备"}), 400
 
     runtime_state["camera_type"] = camera_type
+    model_service.ensure_loaded(cooldown_sec=0.0)
     runtime_state["camera_on"] = True
     runtime_state["detection_on"] = True
     runtime_state["camera_state"] = "已连接"
@@ -953,6 +966,16 @@ def frame_data():
 
     if not runtime_state["detection_on"]:
         return jsonify({"ok": True, "boxes": [], "counts": {}, "detection_on": False})
+    model_service.ensure_loaded(cooldown_sec=0.0)
+    if not model_service.model:
+        return jsonify(
+            {
+                "ok": False,
+                "message": model_service.last_error or "模型未加载，无法推理",
+                "boxes": [],
+                "counts": {},
+            }
+        )
 
     payload = request.get_json(silent=True) or {}
     frame_meta = {"source": runtime_state["camera_type"], "openmv": openmv_settings}
