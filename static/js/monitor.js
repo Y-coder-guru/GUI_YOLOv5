@@ -20,6 +20,12 @@ let durationBaseAt = Date.now();
 let durationCameraOn = false;
 let configSyncPausedUntil = 0;
 
+function stopLocalStream() {
+  if (!stream) return;
+  stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+}
+
 function isConfigEditing() {
   const ids = [
     'cfgResolution', 'cfgFps', 'cfgExposure', 'cfgGain', 'cfgBaudrate', 'cfgTimeout',
@@ -125,7 +131,10 @@ async function refreshSystem() {
   statusText.textContent = `状态：${data.detection_on ? '运行中' : (data.camera_on ? '摄像头已开启' : '待机')}`;
   cameraMeta.textContent = `类型：${data.camera_type || '-'} | 分辨率：${data.openmv_settings?.resolution || '-'} | 帧率：${data.openmv_settings?.fps || '-'}fps`;
   perfMeta.textContent = `推理耗时：${data.last_inference_ms || '-'}ms`;
-  modelMeta.textContent = `模型：${data.model_name || '-'}（${data.model_loaded ? '已加载' : '未加载'}）`;
+
+  const reason = !data.model_loaded && data.model_error ? `：${data.model_error}` : '';
+  modelMeta.textContent = `模型：${data.model_name || '-'}（${data.model_loaded ? '已加载' : `未加载${reason}` }）`;
+
 
   const cfg = data.openmv_settings || {};
   if (shouldSyncConfig) patchConfigInputs(cfg);
@@ -182,10 +191,7 @@ async function pollOpenmvFrames() {
 
 async function ensureCameraPreview(data) {
   if (!data.camera_on) {
-    if (stream) {
-      stream.getTracks().forEach((t) => t.stop());
-      stream = null;
-    }
+    stopLocalStream();
     video.classList.remove('d-none');
     openmvImage.classList.add('d-none');
     if (frameTimer) {
@@ -217,10 +223,7 @@ async function ensureCameraPreview(data) {
       frameTimer = null;
     }
   } else {
-    if (stream) {
-      stream.getTracks().forEach((t) => t.stop());
-      stream = null;
-    }
+    stopLocalStream();
     video.classList.add('d-none');
     openmvImage.classList.remove('d-none');
     if (!frameTimer) frameTimer = setInterval(pollOpenmvFrames, 500);
@@ -324,12 +327,16 @@ document.getElementById('openCameraBtn').onclick = async () => {
     showToast(resp.message || '摄像头开启失败', 'warning');
     return;
   }
+  if (!resp.model_loaded && resp.model_error) {
+    showToast(`模型未加载：${resp.model_error}`, 'warning');
+  }
   ensureDetectionPolling(!!resp.detection_on);
   showToast(resp.detection_on ? '摄像头已开启，检测已自动开始' : '摄像头已开启');
   await refreshSystem();
 };
 
 document.getElementById('closeCameraBtn').onclick = async () => {
+  stopLocalStream();
   await postApi('/api/camera/stop');
   drawBoxes([]);
   renderCounts({});
@@ -373,7 +380,5 @@ refreshSystem();
 renderDurationTick();
 
 window.addEventListener('beforeunload', () => {
-  if (stream) {
-    stream.getTracks().forEach((t) => t.stop());
-  }
+  stopLocalStream();
 });

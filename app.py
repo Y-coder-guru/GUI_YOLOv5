@@ -57,6 +57,10 @@ try:
     import cv2
 except ImportError:  # pragma: no cover
     cv2 = None
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover
+    Image = None
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "instance" / "yolo_monitor.db"
@@ -918,7 +922,16 @@ def start_camera():
         runtime_state["camera_started_at"] = time.time()
 
     add_log("device", f"摄像头已开启({camera_type})并自动开始检测", current_user.id)
-    return jsonify({"ok": True, "camera_on": True, "camera_type": camera_type, "detection_on": True})
+    return jsonify(
+        {
+            "ok": True,
+            "camera_on": True,
+            "camera_type": camera_type,
+            "detection_on": True,
+            "model_loaded": bool(model_service.model),
+            "model_error": model_service.last_error,
+        }
+    )
 
 
 @app.post("/api/camera/stop")
@@ -994,8 +1007,20 @@ def frame_data():
         except Exception:
             pass
     if frame_provided and "frame_array" not in frame_meta:
-        if cv2 is None:
-            return jsonify({"ok": False, "message": "服务器缺少 opencv-python，无法解析摄像头帧", "boxes": [], "counts": {}})
+
+        try:
+            raw = base64.b64decode(frame_b64)
+            if Image is not None:
+                from io import BytesIO
+
+                frame = np.array(Image.open(BytesIO(raw)).convert("RGB"))
+                if frame is not None and frame.size > 0:
+                    frame_meta["frame_array"] = frame
+        except Exception:
+            pass
+
+    if frame_provided and "frame_array" not in frame_meta:
+
         return jsonify({"ok": False, "message": "摄像头帧解析失败，请检查图像编码格式", "boxes": [], "counts": {}})
 
     infer_start = time.perf_counter()
