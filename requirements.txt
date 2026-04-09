@@ -1,4 +1,5 @@
 # GUI_YOLOv5 unified requirements (pip)
+
 # Compatible target: Python 3.9/3.10 (Windows/Linux/macOS)
 
 # ===== Web/GUI service =====
@@ -35,3 +36,4 @@ tensorboard>=2.14,<2.16
 # ===== Optional utilities =====
 gitpython>=3.1,<4
 psutil>=5.9,<8
+

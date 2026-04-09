@@ -1,5 +1,6 @@
 # 依赖安装说明（GUI_YOLOv5）
 
+
 你反馈的报错是对的：之前那版依赖里把 `opencv-python==4.12.0.88` 和 `scipy==1.10.1` 固定在一起，
 在 Python 3.9/3.10 下会被 `numpy` 版本约束卡住（`opencv 4.12` 倾向 `numpy>=2`，而 `scipy 1.10` 要 `numpy<1.27`）。
 
@@ -28,14 +29,18 @@ python -m pip install -U pip setuptools wheel
 ```
 
 ### 2) 安装项目依赖（推荐）
+
 ```bash
 pip install -r requirements.txt
 ```
 
+
 ### 3) 如果你要尽量贴近学姐原环境
+
 ```bash
 pip install -r requirements_zhihuis_pip.txt
 ```
+
 
 ## 关于你说的 YOLOv8 / alltrack
 
@@ -46,3 +51,4 @@ pip install -r requirements_zhihuis_pip.txt
 
 先看是不是你本地还额外指定了 `numpy==2.1.2`（截图里就是这个触发冲突），
 如果有，请从你本地 requirements 或安装命令里删掉这个固定版本再装。
+
