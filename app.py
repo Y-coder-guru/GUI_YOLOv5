@@ -191,11 +191,10 @@ class YoloModelService:
         self.last_error = ""
         self.last_reload_attempt_ts = time.time()
         if not YOLO:
-            self.last_error = "未安装 ultralytics，当前为演示模式"
+            self.last_error = "未安装 ultralytics，无法加载 YOLO 权重"
             return False, self.last_error
         if not self.model_path.exists():
             self.last_error = f"模型文件不存在：{self.model_path.name}"
-            self.model_name = f"{self.model_path.name} (missing, using demo mode)"
             return False, self.last_error
         try:
             self.model = YOLO(str(self.model_path))
@@ -916,7 +915,7 @@ def start_camera():
     runtime_state["camera_type"] = camera_type
     model_service.ensure_loaded(cooldown_sec=0.0)
     runtime_state["camera_on"] = True
-    runtime_state["detection_on"] = True
+    runtime_state["detection_on"] = bool(model_service.model)
     runtime_state["camera_state"] = "已连接"
     if runtime_state["camera_started_at"] is None:
         runtime_state["camera_started_at"] = time.time()
@@ -927,9 +926,12 @@ def start_camera():
             "ok": True,
             "camera_on": True,
             "camera_type": camera_type,
-            "detection_on": True,
+
+            "detection_on": runtime_state["detection_on"],
             "model_loaded": bool(model_service.model),
             "model_error": model_service.last_error,
+            "message": "" if model_service.model else (model_service.last_error or "模型未加载，未开启检测"),
+
         }
     )
 

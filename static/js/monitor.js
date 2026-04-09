@@ -331,7 +331,11 @@ document.getElementById('openCameraBtn').onclick = async () => {
     showToast(`模型未加载：${resp.model_error}`, 'warning');
   }
   ensureDetectionPolling(!!resp.detection_on);
-  showToast(resp.detection_on ? '摄像头已开启，检测已自动开始' : '摄像头已开启');
+  if (resp.detection_on) {
+    showToast('摄像头已开启，检测已自动开始');
+  } else {
+    showToast(resp.message || '摄像头已开启，但模型未加载，检测未启动', 'warning');
+  }
   await refreshSystem();
 };
 
