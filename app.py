@@ -926,10 +926,12 @@ def start_camera():
             "ok": True,
             "camera_on": True,
             "camera_type": camera_type,
+
             "detection_on": runtime_state["detection_on"],
             "model_loaded": bool(model_service.model),
             "model_error": model_service.last_error,
             "message": "" if model_service.model else (model_service.last_error or "模型未加载，未开启检测"),
+
         }
     )
 
@@ -1007,6 +1009,7 @@ def frame_data():
         except Exception:
             pass
     if frame_provided and "frame_array" not in frame_meta:
+
         try:
             raw = base64.b64decode(frame_b64)
             if Image is not None:
@@ -1019,6 +1022,7 @@ def frame_data():
             pass
 
     if frame_provided and "frame_array" not in frame_meta:
+
         return jsonify({"ok": False, "message": "摄像头帧解析失败，请检查图像编码格式", "boxes": [], "counts": {}})
 
     infer_start = time.perf_counter()
