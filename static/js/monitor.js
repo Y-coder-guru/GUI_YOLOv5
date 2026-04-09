@@ -131,7 +131,9 @@ async function refreshSystem() {
   statusText.textContent = `状态：${data.detection_on ? '运行中' : (data.camera_on ? '摄像头已开启' : '待机')}`;
   cameraMeta.textContent = `类型：${data.camera_type || '-'} | 分辨率：${data.openmv_settings?.resolution || '-'} | 帧率：${data.openmv_settings?.fps || '-'}fps`;
   perfMeta.textContent = `推理耗时：${data.last_inference_ms || '-'}ms`;
+
   modelMeta.textContent = `模型：${data.model_name || '-'}（${data.model_loaded ? '已加载' : '未加载'}）`;
+
 
   const cfg = data.openmv_settings || {};
   if (shouldSyncConfig) patchConfigInputs(cfg);
@@ -324,8 +326,13 @@ document.getElementById('openCameraBtn').onclick = async () => {
     showToast(resp.message || '摄像头开启失败', 'warning');
     return;
   }
+  if (!resp.model_loaded && resp.model_error) {
+    showToast(`模型未加载：${resp.model_error}`, 'warning');
+  }
   ensureDetectionPolling(!!resp.detection_on);
+
   showToast('摄像头已开启，同步开启了检测');
+
   await refreshSystem();
 };
 

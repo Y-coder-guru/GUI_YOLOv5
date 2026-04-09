@@ -915,7 +915,7 @@ def start_camera():
     runtime_state["camera_type"] = camera_type
     model_service.ensure_loaded(cooldown_sec=0.0)
     runtime_state["camera_on"] = True
-    runtime_state["detection_on"] = True
+    runtime_state["detection_on"] = bool(model_service.model)
     runtime_state["camera_state"] = "已连接"
     if runtime_state["camera_started_at"] is None:
         runtime_state["camera_started_at"] = time.time()
@@ -926,10 +926,12 @@ def start_camera():
             "ok": True,
             "camera_on": True,
             "camera_type": camera_type,
+
             "detection_on": runtime_state["detection_on"],
             "model_loaded": bool(model_service.model),
             "model_error": model_service.last_error,
             "message": "",
+
         }
     )
 
@@ -981,7 +983,9 @@ def frame_data():
         return jsonify({"ok": True, "boxes": [], "counts": {}, "detection_on": False})
     model_service.ensure_loaded(cooldown_sec=0.0)
     if not model_service.model:
+
         return jsonify({"ok": True, "boxes": [], "counts": {}, "detection_on": True})
+
 
     payload = request.get_json(silent=True) or {}
     frame_meta = {"source": runtime_state["camera_type"], "openmv": openmv_settings}
@@ -1000,6 +1004,7 @@ def frame_data():
         except Exception:
             pass
     if frame_provided and "frame_array" not in frame_meta:
+
         try:
             raw = base64.b64decode(frame_b64)
             if Image is not None:
@@ -1012,6 +1017,7 @@ def frame_data():
             pass
 
     if frame_provided and "frame_array" not in frame_meta:
+
         return jsonify({"ok": False, "message": "摄像头帧解析失败，请检查图像编码格式", "boxes": [], "counts": {}})
 
     infer_start = time.perf_counter()
